@@ -1,5 +1,11 @@
-def main():
-    print("Hello from summarix!")
+import uvicorn
+
+from app.core.config import get_settings
+
+
+def main() -> None:
+    settings = get_settings()
+    uvicorn.run("app.api.app:app", host=settings.host, port=settings.port, reload=settings.app_env == "local")
 
 
 if __name__ == "__main__":

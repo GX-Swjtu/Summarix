@@ -1,0 +1,1 @@
+"""Summarix backend package."""

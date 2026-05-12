@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: summarix-postgres
+    environment:
+      POSTGRES_DB: summarix
+      POSTGRES_USER: summarix
+      POSTGRES_PASSWORD: summarix
+    ports:
+      - "5432:5432"
+    volumes:
+      - summarix-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U summarix -d summarix"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  summarix-postgres:

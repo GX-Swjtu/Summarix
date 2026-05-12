@@ -9,3 +9,10 @@ wheels/
 # Virtual environments
 .venv
 .env
+
+# Local runtime data
+.data/
+
+# Frontend dependencies and build output
+extension/node_modules/
+extension/dist/
