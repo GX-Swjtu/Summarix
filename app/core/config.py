@@ -7,6 +7,9 @@ from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+LOCAL_EXTENSION_ORIGIN_REGEX = r"^(chrome-extension://[a-p]{32}|moz-extension://[0-9a-fA-F-]{36})$"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
@@ -16,7 +19,8 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 8000
 
-    database_url: str = "postgresql+asyncpg://summarix:summarix@localhost:5432/summarix"
+    database_url: str = Field(..., min_length=1)
+    database_auto_create_database: bool = True
     database_auto_create_tables: bool = True
 
     jwt_secret_key: str = "change-me-in-.env"
@@ -43,7 +47,7 @@ class Settings(BaseSettings):
     chat_agent_mode: Literal["adk", "mock"] = "adk"
     chat_artifact_root: str = ".data/artifacts"
     chat_max_artifact_bytes: int = 8 * 1024 * 1024
-    default_chat_model: str = "qwen3.5-flash"
+    default_chat_model: str = "dashscope/qwen3.5-flash"
     text_summary_model: str | None = None
     vision_analysis_model: str | None = None
     conversation_model: str | None = None
@@ -94,6 +98,16 @@ class Settings(BaseSettings):
     @property
     def effective_cors_allow_origins(self) -> list[str]:
         return list(dict.fromkeys([*self.cors_allow_origins, *self.browser_extension_origins]))
+
+    @property
+    def effective_cors_allow_origin_regex(self) -> str | None:
+        if self.cors_allow_origin_regex:
+            return self.cors_allow_origin_regex
+        if self.browser_extension_origins:
+            return None
+        if self.app_env.lower() not in {"local", "development", "dev"}:
+            return None
+        return LOCAL_EXTENSION_ORIGIN_REGEX
 
     @property
     def effective_adk_database_url(self) -> str:

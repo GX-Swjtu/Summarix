@@ -12,6 +12,7 @@ from app.api.schemas import ChatStreamRequest
 from app.chat.artifacts import get_artifact_service
 from app.chat.runner import create_runner, get_adk_session_service
 from app.core.config import Settings, get_settings
+from app.db.init import ensure_database_exists
 from app.db.models import Conversation, Message, MessageArtifact, UserModelPreference
 
 
@@ -21,6 +22,8 @@ logger = logging.getLogger(__name__)
 async def ensure_adk_session(user_id: str, conversation: Conversation, settings: Settings) -> None:
     if settings.chat_agent_mode != "adk":
         return
+    if settings.database_auto_create_database:
+        await ensure_database_exists(settings.effective_adk_database_url)
     session_service = get_adk_session_service(settings)
     adk_session = await session_service.get_session(
         app_name=settings.chat_app_name,

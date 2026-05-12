@@ -187,25 +187,38 @@ export async function streamChat(options: {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+
+  const consumeEventText = async (eventText: string): Promise<void> => {
+    if (!eventText.trim()) {
+      return;
+    }
+    const lines = eventText.split(/\r?\n/);
+    const event = lines.find((line) => line.startsWith("event:"))?.slice(6).trim();
+    const data = lines
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trimStart())
+      .join("\n");
+
+    if (event === "conversation") options.onConversation(data);
+    if (event === "delta") options.onDelta(data);
+    if (event === "error") {
+      await reader.cancel();
+      throw new Error(data || "AI 响应失败");
+    }
+  };
+
   while (true) {
     const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const events = buffer.split("\n\n");
+    buffer += decoder.decode(value, { stream: !done });
+    const events = buffer.split(/\r?\n\r?\n/);
     buffer = events.pop() || "";
     for (const eventText of events) {
-      const lines = eventText.split("\n");
-      const event = lines.find((line) => line.startsWith("event:"))?.slice(6).trim();
-      const data = lines
-        .filter((line) => line.startsWith("data:"))
-        .map((line) => line.slice(5).trimStart())
-        .join("\n");
-      if (event === "conversation") options.onConversation(data);
-      if (event === "delta") options.onDelta(data);
-      if (event === "error") {
-        await reader.cancel();
-        throw new Error(data || "AI 响应失败");
-      }
+      await consumeEventText(eventText);
+    }
+    if (done) {
+      break;
     }
   }
+
+  await consumeEventText(buffer);
 }

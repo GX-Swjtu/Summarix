@@ -4,7 +4,7 @@ import pytest
 from httpx import AsyncClient
 from google.adk.errors.already_exists_error import AlreadyExistsError
 
-from app.chat.runner import get_adk_session_service
+from app.chat.runner import create_runner, get_adk_session_service
 from app.chat.stream_service import ensure_adk_session
 from app.core.config import Settings
 from app.db.models import Conversation
@@ -107,3 +107,65 @@ async def test_ensure_adk_session_ignores_duplicate_creation(monkeypatch: pytest
     await ensure_adk_session("user-id", conversation, settings)
 
     assert calls == {"get": 1, "create": 1}
+
+
+@pytest.mark.asyncio
+async def test_ensure_adk_session_auto_creates_separate_database(monkeypatch: pytest.MonkeyPatch):
+    calls: list[tuple[str, str]] = []
+
+    class StubSessionService:
+        async def get_session(self, **_: str):
+            calls.append(("get", "session-id"))
+            return None
+
+        async def create_session(self, **_: str):
+            calls.append(("create", "session-id"))
+
+    async def fake_ensure_database_exists(database_url: str):
+        calls.append(("db", database_url))
+
+    monkeypatch.setattr("app.chat.stream_service.ensure_database_exists", fake_ensure_database_exists)
+    monkeypatch.setattr("app.chat.stream_service.get_adk_session_service", lambda settings: StubSessionService())
+
+    settings = Settings(
+        jwt_secret_key="x" * 32,
+        database_url="sqlite+aiosqlite:///:memory:",
+        database_auto_create_database=True,
+        adk_database_url="postgresql+asyncpg://tester:secret@db.example.com:5432/summarix-adk",
+        chat_agent_mode="adk",
+    )
+    conversation = Conversation(user_id="user-id", adk_session_id="session-id")
+
+    await ensure_adk_session("user-id", conversation, settings)
+
+    assert calls == [
+        ("db", settings.effective_adk_database_url),
+        ("get", "session-id"),
+        ("create", "session-id"),
+    ]
+
+
+def test_create_runner_uses_configured_model_name(monkeypatch: pytest.MonkeyPatch):
+    calls: dict[str, object] = {}
+
+    def fake_create_web_assistant(model_name: str):
+        calls["model_name"] = model_name
+        return "agent"
+
+    class StubRunner:
+        def __init__(self, **kwargs):
+            calls["runner_kwargs"] = kwargs
+
+    monkeypatch.setattr("app.chat.runner.create_web_assistant", fake_create_web_assistant)
+    monkeypatch.setattr("app.chat.runner.Runner", StubRunner)
+    monkeypatch.setattr("app.chat.runner.get_adk_session_service", lambda settings: "session-service")
+    monkeypatch.setattr("app.chat.runner.get_artifact_service", lambda: "artifact-service")
+
+    settings = Settings(
+        jwt_secret_key="x" * 32,
+        database_url="sqlite+aiosqlite:///:memory:",
+    )
+
+    create_runner("dashscope/qwen3.5-flash", settings)
+
+    assert calls["model_name"] == "dashscope/qwen3.5-flash"

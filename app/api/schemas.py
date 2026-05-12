@@ -112,9 +112,9 @@ class ModelSettingsRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "text_summary_model": "qwen3.5-flash",
-                "vision_analysis_model": "qwen3.5-vl-flash",
-                "conversation_model": "qwen3.5-flash",
+                "text_summary_model": "dashscope/qwen3.5-flash",
+                "vision_analysis_model": "dashscope/qwen3.5-flash",
+                "conversation_model": "dashscope/qwen3.5-flash",
             }
         }
     )

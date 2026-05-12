@@ -26,15 +26,13 @@ tests/api/              # 按功能拆分的接口测试
 Copy-Item .env.example .env
 ```
 
-然后把 `.env` 中的 `JWT_SECRET_KEY` 替换为至少 32 个字符的强随机密钥，否则后端会拒绝启动。
+然后在 `.env` 中填写 `DATABASE_URL`，使用你已经准备好的 PostgreSQL 地址、账号和密码；再把 `JWT_SECRET_KEY` 替换为至少 32 个字符的强随机密钥，否则后端会拒绝启动。
 
-2. 启动 PostgreSQL。
+`DATABASE_AUTO_CREATE_DATABASE=true` 时，如果 PostgreSQL 服务已存在但目标数据库还没创建，后端会尝试自动建库；这要求当前数据库账号具备建库权限。
 
-```powershell
-docker compose up -d postgres
-```
+`DATABASE_AUTO_CREATE_TABLES=true` 时，后端会在已连接的数据库中创建缺失表；它不会启动数据库服务。
 
-3. 安装依赖并启动后端。
+2. 安装依赖并启动后端。
 
 ```powershell
 uv sync
@@ -44,6 +42,8 @@ uv run --env-file .env main.py
 默认服务地址是 `http://127.0.0.1:8000`，OpenAPI 文档地址是 `http://127.0.0.1:8000/docs`。
 
 本地没有模型密钥时，`.env` 里保持 `CHAT_AGENT_MODE=mock` 即可跑通插件与接口流程；接入真实模型后改为 `CHAT_AGENT_MODE=adk`，并按 LiteLLM 供应商要求配置对应环境变量。
+
+LiteLLM 模型请直接使用 `provider/model` 形式，例如 `dashscope/qwen3.5-flash` 或 `dashscope/qwen3.5-flash`。后端不会再自动补全 provider。
 
 ## 插件本地运行
 
@@ -74,10 +74,10 @@ BROWSER_EXTENSION_ORIGINS=chrome-extension://your-extension-id
 
 ## 测试
 
-接口测试使用 SQLite 内存库和 mock 聊天模式，不依赖真实模型 key。
+接口测试会强制使用 SQLite 内存库和 mock 聊天模式，不会连接 `.env` 中配置的真实数据库，也不依赖真实模型 key。
 
 ```powershell
-uv run --env-file .env pytest tests/api/test_auth.py tests/api/test_artifacts.py tests/api/test_chat_stream.py tests/api/test_history.py tests/api/test_settings.py
+uv run pytest tests/api/test_auth.py tests/api/test_artifacts.py tests/api/test_chat_stream.py tests/api/test_history.py tests/api/test_settings.py
 ```
 
 ## GitHub CI / CD
@@ -111,7 +111,7 @@ CHAT_AGENT_MODE=adk
 BROWSER_EXTENSION_ORIGINS=chrome-extension://your-extension-id
 ```
 
-ADK 会话默认使用 `DATABASE_URL` 通过 `DatabaseSessionService` 持久化到数据库；如果需要独立数据库，可以额外设置 `ADK_DATABASE_URL`。
+ADK 会话默认使用 `DATABASE_URL` 通过 `DatabaseSessionService` 持久化到数据库；如果需要独立数据库，可以额外设置 `ADK_DATABASE_URL`。当 `DATABASE_AUTO_CREATE_DATABASE=true` 时，独立的 ADK 数据库在不存在时也会尝试自动创建。
 
 ## 设计说明
 

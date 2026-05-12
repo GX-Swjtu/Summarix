@@ -1,6 +1,8 @@
 import pytest
+from httpx import ASGITransport
 from httpx import AsyncClient
 
+from app.api.app import create_app
 from app.core.config import Settings
 
 
@@ -31,6 +33,57 @@ def test_settings_allow_http_cors_regex():
         cors_allow_origin_regex=r"^https://(localhost|127\\.0\\.0\\.1)(:\\d+)?$",
     )
     assert settings.cors_allow_origin_regex == r"^https://(localhost|127\\.0\\.0\\.1)(:\\d+)?$"
+
+
+@pytest.mark.asyncio
+async def test_local_dev_preflight_allows_extension_origin_without_explicit_config():
+    settings = Settings(
+        app_env="local",
+        database_url="sqlite+aiosqlite:///:memory:",
+        database_auto_create_database=False,
+        database_auto_create_tables=False,
+        jwt_secret_key="x" * 32,
+        chat_agent_mode="mock",
+    )
+    app = create_app(settings)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.options(
+            "/api/chat/stream",
+            headers={
+                "Origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type",
+            },
+        )
+
+    assert response.headers["access-control-allow-origin"] == "chrome-extension://abcdefghijklmnopabcdefghijklmnop"
+    assert response.headers["access-control-allow-credentials"] == "true"
+
+
+@pytest.mark.asyncio
+async def test_production_preflight_does_not_allow_unknown_extension_origin_by_default():
+    settings = Settings(
+        app_env="production",
+        database_url="sqlite+aiosqlite:///:memory:",
+        database_auto_create_database=False,
+        database_auto_create_tables=False,
+        jwt_secret_key="x" * 32,
+        chat_agent_mode="mock",
+    )
+    app = create_app(settings)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.options(
+            "/api/chat/stream",
+            headers={
+                "Origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type",
+            },
+        )
+
+    assert "access-control-allow-origin" not in response.headers
 
 
 @pytest.mark.asyncio

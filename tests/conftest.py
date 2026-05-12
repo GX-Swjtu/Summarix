@@ -4,11 +4,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
-os.environ.setdefault("DATABASE_AUTO_CREATE_TABLES", "false")
-os.environ.setdefault("JWT_SECRET_KEY", "test-secret-with-at-least-thirty-two-bytes")
-os.environ.setdefault("CHAT_AGENT_MODE", "mock")
-os.environ.setdefault("CHAT_ARTIFACT_ROOT", ".data/test-artifacts")
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
+os.environ["DATABASE_AUTO_CREATE_DATABASE"] = "false"
+os.environ["DATABASE_AUTO_CREATE_TABLES"] = "false"
+os.environ["JWT_SECRET_KEY"] = "test-secret-with-at-least-thirty-two-bytes"
+os.environ["CHAT_AGENT_MODE"] = "mock"
+os.environ["CHAT_ARTIFACT_ROOT"] = ".data/test-artifacts"
 
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
