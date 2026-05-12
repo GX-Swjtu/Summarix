@@ -80,6 +80,18 @@ BROWSER_EXTENSION_ORIGINS=chrome-extension://your-extension-id
 uv run --env-file .env pytest tests/api/test_auth.py tests/api/test_artifacts.py tests/api/test_chat_stream.py tests/api/test_history.py tests/api/test_settings.py
 ```
 
+## GitHub CI / CD
+
+仓库内置两个 GitHub Actions workflow：
+
+- PR 到 `main` 时运行 CI，包含后端 API 测试、后端 Docker 构建校验和插件构建。
+- 代码合入 `main` 且涉及 `extension/` 后，会自动构建插件并上传 zip 产物到 GitHub Actions artifact。
+- 推送版本标签（例如 `v0.1.0`）时，会重新构建插件并把 zip 附加到对应的 GitHub Release。
+
+插件发布标签必须与 `extension/package.json` 中的 `version` 一致，否则发布 workflow 会失败，避免错发版本。
+
+当前后端 Docker 仅在 CI 中执行构建校验，不做镜像推送或自动部署；如果后续需要发布后端镜像，可以在现有 workflow 基础上继续扩展。
+
 ## Docker / Cloud Run 基线
 
 本仓库提供基础 `Dockerfile`，镜像入口为：

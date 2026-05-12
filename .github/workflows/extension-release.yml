@@ -1,0 +1,97 @@
+name: Extension Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+    paths:
+      - 'extension/**'
+      - '.github/workflows/extension-release.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: extension-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package-extension:
+    name: 打包插件产物
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+
+      - name: 安装插件依赖
+        working-directory: extension
+        run: npm ci
+
+      - name: 读取插件版本
+        id: version
+        working-directory: extension
+        shell: bash
+        run: |
+          version="$(node -p \"JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version\")"
+          echo "value=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: 校验标签与插件版本一致
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          expected_tag="v${{ steps.version.outputs.value }}"
+          actual_tag="${GITHUB_REF_NAME}"
+          if [ "$actual_tag" != "$expected_tag" ]; then
+            echo "::error::当前标签 ${actual_tag} 与 extension/package.json 中的版本 ${expected_tag} 不一致"
+            exit 1
+          fi
+
+      - name: 构建插件
+        working-directory: extension
+        run: npm run build
+
+      - name: 打包插件构建产物
+        id: package
+        shell: bash
+        run: |
+          version="${{ steps.version.outputs.value }}"
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            archive_name="summarix-extension-${GITHUB_REF_NAME}.zip"
+          else
+            short_sha="${GITHUB_SHA::7}"
+            archive_name="summarix-extension-v${version}-${short_sha}.zip"
+          fi
+          archive_path="${RUNNER_TEMP}/${archive_name}"
+          cd extension/dist
+          zip -rq "$archive_path" .
+          echo "name=${archive_name}" >> "$GITHUB_OUTPUT"
+          echo "path=${archive_path}" >> "$GITHUB_OUTPUT"
+
+      - name: 上传主分支插件产物
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: ${{ steps.package.outputs.path }}
+          if-no-files-found: error
+
+      - name: 创建或更新 Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: ${{ steps.package.outputs.path }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
