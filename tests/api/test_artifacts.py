@@ -16,6 +16,11 @@ async def test_upload_artifact(authenticated_client: AsyncClient):
     assert payload["mime_type"] == "image/png"
     assert payload["size_bytes"] == 9
 
+    content_response = await authenticated_client.get(f"/api/chat/artifacts/{payload['id']}/content")
+    assert content_response.status_code == 200
+    assert content_response.headers["content-type"].startswith("image/png")
+    assert content_response.content == b"png-bytes"
+
 
 @pytest.mark.asyncio
 async def test_upload_artifact_rejects_unknown_source(authenticated_client: AsyncClient):

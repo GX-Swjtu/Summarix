@@ -114,6 +114,11 @@ button:disabled {
   background: #ffffff;
 }
 
+.loading-shell {
+  align-content: center;
+  justify-items: center;
+}
+
 .brand-row {
   display: inline-flex;
   align-items: center;
@@ -197,6 +202,12 @@ textarea:focus {
   padding: 10px;
 }
 
+.chat-layout.drag-active {
+  outline: 2px dashed #0f766e;
+  outline-offset: -6px;
+  background: #f0fdfa;
+}
+
 .settings-layout {
   height: auto;
 }
@@ -230,6 +241,10 @@ textarea:focus {
   word-break: break-word;
 }
 
+.message-text {
+  min-height: 1.55em;
+}
+
 .message.user {
   align-self: flex-end;
   background: #0f766e;
@@ -247,6 +262,98 @@ textarea:focus {
   overflow-x: auto;
 }
 
+.draft-strip,
+.message-attachments {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+}
+
+.draft-strip {
+  padding-bottom: 2px;
+}
+
+.image-chip,
+.attachment-preview {
+  position: relative;
+  display: grid;
+  flex: 0 0 auto;
+  gap: 4px;
+  width: 82px;
+  margin: 0;
+}
+
+.image-chip img,
+.attachment-preview img,
+.image-placeholder {
+  width: 82px;
+  height: 62px;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 6px;
+  background: #eef2f7;
+  object-fit: cover;
+}
+
+.image-chip figcaption,
+.attachment-preview figcaption {
+  overflow: hidden;
+  color: #667085;
+  font-size: 11px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.image-chip button {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.72);
+  color: #ffffff;
+}
+
+.image-chip.error img {
+  border-color: #ef4444;
+}
+
+.message-attachments {
+  margin-bottom: 7px;
+}
+
+.thought-block {
+  margin-top: 8px;
+  border-top: 1px solid rgba(15, 23, 42, 0.12);
+  padding-top: 7px;
+}
+
+.message.user .thought-block {
+  border-top-color: rgba(255, 255, 255, 0.24);
+}
+
+.thought-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-height: 24px;
+  padding: 0;
+  background: transparent;
+  color: #667085;
+  font-size: 12px;
+}
+
+.thought-content {
+  margin-top: 5px;
+  color: #475467;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .artifact-strip span {
   flex: 0 0 auto;
   padding: 5px 8px;
@@ -258,14 +365,24 @@ textarea:focus {
 
 .composer {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 8px;
   align-items: end;
 }
 
+.attach,
 .send {
   align-self: stretch;
   height: auto;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
 .history-grid {

@@ -18,11 +18,16 @@ export type Artifact = {
   version: number;
 };
 
+export type MessageAttachment = Artifact & {
+  previewUrl?: string;
+};
+
 export type Message = {
   id: string;
   role: "user" | "assistant" | string;
   content: string;
   created_at: string;
+  artifacts?: Artifact[];
 };
 
 export type ConversationSummary = {
@@ -43,6 +48,34 @@ export type HistoryPage = {
 export type ConversationDetail = ConversationSummary & {
   messages: Message[];
   artifacts: Artifact[];
+};
+
+export type AdkPart = {
+  text?: string;
+  thought?: boolean;
+  functionCall?: unknown;
+  function_call?: unknown;
+  functionResponse?: unknown;
+  function_response?: unknown;
+};
+
+export type AdkEvent = {
+  id?: string;
+  author?: string;
+  invocationId?: string;
+  invocation_id?: string;
+  content?: {
+    role?: string;
+    parts?: AdkPart[];
+  };
+  partial?: boolean;
+  turnComplete?: boolean;
+  turn_complete?: boolean;
+  interrupted?: boolean;
+  errorCode?: string;
+  error_code?: string;
+  errorMessage?: string;
+  error_message?: string;
 };
 
 export type ModelSettings = {

@@ -80,6 +80,7 @@ class MessagePublic(BaseModel):
     role: Literal["user", "assistant"] | str
     content: str
     created_at: datetime
+    artifacts: list[ArtifactResponse] = Field(default_factory=list)
 
 
 class ConversationSummary(BaseModel):

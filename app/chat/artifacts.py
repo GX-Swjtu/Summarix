@@ -62,3 +62,13 @@ async def save_upload_artifact(
     await session.commit()
     await session.refresh(artifact)
     return artifact
+
+
+async def load_artifact_part(artifact: MessageArtifact, settings: Settings | None = None) -> types.Part | None:
+    settings = settings or get_settings()
+    return await get_artifact_service().load_artifact(
+        app_name=settings.chat_app_name,
+        user_id=artifact.user_id,
+        filename=f"user:{artifact.storage_filename}",
+        version=artifact.version,
+    )

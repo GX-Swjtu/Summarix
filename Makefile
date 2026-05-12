@@ -11,7 +11,7 @@ PYTEST_RUN := uv run
 # 插件目录
 EXTENSION_DIR := extension
 
-.PHONY: help sync install run backend test test-api test-file extension-install extension-build extension-dev build push verify
+.PHONY: help sync install run backend db-reset test test-api test-file extension-install extension-build extension-dev build push verify
 
 # 默认目标，展示可用命令
 .DEFAULT_GOAL := help
@@ -23,6 +23,7 @@ help:
 	@echo "  make install          - sync 的别名"
 	@echo "  make run              - 直接运行后端服务"
 	@echo "  make backend          - 直接运行后端服务"
+	@echo "  make db-reset         - 删除并重建数据库，同时初始化管理员账号"
 	@echo "  make test             - 运行全部 Python 测试"
 	@echo "  make test-api         - 运行 API 测试"
 	@echo "  make test-file TEST=tests/api/test_auth.py - 运行指定测试文件或目录"
@@ -49,6 +50,11 @@ backend:
 
 # run 的效果等同于直接启动后端
 run: backend
+
+# 删除并重建数据库，同时初始化管理员账号
+db-reset:
+	@echo "删除并重建数据库，初始化管理员账号"
+	$(UV_RUN) python -m app.db.init reset --admin-email "$(or $(ADMIN_EMAIL),admin@admin.com)" --admin-password "$(or $(ADMIN_PASSWORD),adminGaoxin)"
 
 # 运行全部 Python 测试
 test:

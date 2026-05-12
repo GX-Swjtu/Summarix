@@ -1,4 +1,4 @@
-import type { Artifact, ConversationDetail, HistoryPage, ModelSettings, PageContext, User } from "./types";
+import type { AdkEvent, Artifact, ConversationDetail, HistoryPage, ModelSettings, PageContext, User } from "./types";
 
 const API_BASE_KEY = "summarix_api_base";
 const USER_CACHE_KEY = "summarix_user";
@@ -68,16 +68,16 @@ async function fetchStreamResponse(path: string, init: RequestInit = {}): Promis
   return fetchApiResponse(path, init);
 }
 
-export function readCachedUser(): User | null {
-  const raw = sessionStorage.getItem(USER_CACHE_KEY);
-  return raw ? (JSON.parse(raw) as User) : null;
+export async function readCachedUser(): Promise<User | null> {
+  const stored = await chrome.storage.local.get(USER_CACHE_KEY);
+  return (stored[USER_CACHE_KEY] as User | undefined) || null;
 }
 
-function cacheUser(user: User | null): void {
+async function cacheUser(user: User | null): Promise<void> {
   if (user) {
-    sessionStorage.setItem(USER_CACHE_KEY, JSON.stringify(user));
+    await chrome.storage.local.set({ [USER_CACHE_KEY]: user });
   } else {
-    sessionStorage.removeItem(USER_CACHE_KEY);
+    await chrome.storage.local.remove(USER_CACHE_KEY);
   }
 }
 
@@ -86,7 +86,7 @@ export async function register(email: string, password: string): Promise<User> {
     method: "POST",
     body: JSON.stringify({ email, password })
   });
-  cacheUser(response.user);
+  await cacheUser(response.user);
   return response.user;
 }
 
@@ -95,17 +95,17 @@ export async function login(email: string, password: string): Promise<User> {
     method: "POST",
     body: JSON.stringify({ email, password })
   });
-  cacheUser(response.user);
+  await cacheUser(response.user);
   return response.user;
 }
 
 export async function refreshSession(): Promise<User | null> {
   try {
     const response = await request<{ user: User }>("/api/auth/refresh", { method: "POST" });
-    cacheUser(response.user);
+    await cacheUser(response.user);
     return response.user;
   } catch {
-    cacheUser(null);
+    await cacheUser(null);
     return null;
   }
 }
@@ -113,29 +113,35 @@ export async function refreshSession(): Promise<User | null> {
 export async function getMe(): Promise<User | null> {
   try {
     const response = await request<{ user: User }>("/api/auth/me");
-    cacheUser(response.user);
+    await cacheUser(response.user);
     return response.user;
   } catch (error) {
     if (error instanceof ResponseError && error.status === 401) {
       return refreshSession();
     }
-    cacheUser(null);
+    await cacheUser(null);
     return null;
   }
 }
 
 export async function logout(): Promise<void> {
   await request<void>("/api/auth/logout", { method: "POST" });
-  cacheUser(null);
+  await cacheUser(null);
 }
 
-export async function uploadArtifact(dataUrl: string, filename = "screenshot.png"): Promise<Artifact> {
-  const response = await fetch(dataUrl);
-  const blob = await response.blob();
+export async function uploadArtifact(file: Blob, filename = "image.png", source: "screenshot" | "upload" = "upload"): Promise<Artifact> {
   const form = new FormData();
-  form.append("file", blob, filename);
-  form.append("source", "screenshot");
+  form.append("file", file, filename);
+  form.append("source", source);
   return request<Artifact>("/api/chat/artifacts", { method: "POST", body: form });
+}
+
+export async function getArtifactObjectUrl(id: string): Promise<string> {
+  const response = await fetchApiResponse(`/api/chat/artifacts/${id}/content`);
+  if (!response.ok) {
+    throw new ResponseError(response.status, await readErrorDetail(response, response.statusText || "读取附件失败"));
+  }
+  return URL.createObjectURL(await response.blob());
 }
 
 export async function listHistory(offset = 0, limit = 20): Promise<HistoryPage> {
@@ -166,8 +172,9 @@ export async function streamChat(options: {
   message: string;
   context?: PageContext | null;
   artifactIds?: string[];
-  onConversation: (id: string) => void;
-  onDelta: (text: string) => void;
+  onConversation: (payload: { id: string; user_message_id?: string }) => void;
+  onAdkEvent: (event: AdkEvent) => void;
+  onPersisted?: (payload: { assistant_message_id?: string }) => void;
 }): Promise<void> {
   const response = await fetchStreamResponse("/api/chat/stream", {
     method: "POST",
@@ -199,8 +206,12 @@ export async function streamChat(options: {
       .map((line) => line.slice(5).trimStart())
       .join("\n");
 
-    if (event === "conversation") options.onConversation(data);
-    if (event === "delta") options.onDelta(data);
+    if (event === "conversation") {
+      const payload = JSON.parse(data) as { id: string; user_message_id?: string };
+      options.onConversation(payload);
+    }
+    if (event === "adk_event") options.onAdkEvent(JSON.parse(data) as AdkEvent);
+    if (event === "persisted") options.onPersisted?.(JSON.parse(data) as { assistant_message_id?: string });
     if (event === "error") {
       await reader.cancel();
       throw new Error(data || "AI 响应失败");

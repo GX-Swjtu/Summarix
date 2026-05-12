@@ -5,10 +5,20 @@ from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_current_user
 from app.api.schemas import ArtifactResponse, ConversationDetail, ConversationSummary, HistoryPage, MessagePublic
-from app.db.models import Conversation, User
+from app.db.models import Conversation, Message, User
 from app.db.session import get_db_session
 
 router = APIRouter(prefix="/history", tags=["history"])
+
+
+def artifact_response(artifact) -> ArtifactResponse:
+    return ArtifactResponse(
+        id=artifact.id,
+        filename=artifact.filename,
+        mime_type=artifact.mime_type,
+        size_bytes=artifact.size_bytes,
+        version=artifact.version,
+    )
 
 
 @router.get("", response_model=HistoryPage)
@@ -42,7 +52,10 @@ async def get_history_detail(
 ) -> ConversationDetail:
     result = await session.execute(
         select(Conversation)
-        .options(selectinload(Conversation.messages), selectinload(Conversation.artifacts))
+        .options(
+            selectinload(Conversation.messages).selectinload(Message.artifacts),
+            selectinload(Conversation.artifacts),
+        )
         .where(Conversation.id == conversation_id, Conversation.user_id == current_user.id)
     )
     conversation = result.scalar_one_or_none()
@@ -54,15 +67,15 @@ async def get_history_detail(
         page_url=conversation.page_url,
         page_title=conversation.page_title,
         updated_at=conversation.updated_at,
-        messages=[MessagePublic.model_validate(message) for message in conversation.messages],
-        artifacts=[
-            ArtifactResponse(
-                id=artifact.id,
-                filename=artifact.filename,
-                mime_type=artifact.mime_type,
-                size_bytes=artifact.size_bytes,
-                version=artifact.version,
+        messages=[
+            MessagePublic(
+                id=message.id,
+                role=message.role,
+                content=message.content,
+                created_at=message.created_at,
+                artifacts=[artifact_response(artifact) for artifact in message.artifacts],
             )
-            for artifact in conversation.artifacts
+            for message in conversation.messages
         ],
+        artifacts=[artifact_response(artifact) for artifact in conversation.artifacts],
     )

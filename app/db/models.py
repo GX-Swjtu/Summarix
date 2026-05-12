@@ -75,6 +75,7 @@ class Message(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
 
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
+    artifacts: Mapped[list[MessageArtifact]] = relationship(back_populates="message")
 
 
 class MessageArtifact(Base):
@@ -83,6 +84,7 @@ class MessageArtifact(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
     conversation_id: Mapped[str | None] = mapped_column(ForeignKey("conversations.id", ondelete="SET NULL"), index=True, nullable=True)
+    message_id: Mapped[str | None] = mapped_column(ForeignKey("messages.id", ondelete="SET NULL"), index=True, nullable=True)
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
     storage_filename: Mapped[str] = mapped_column(String(320), nullable=False)
     mime_type: Mapped[str] = mapped_column(String(120), nullable=False)
@@ -92,6 +94,7 @@ class MessageArtifact(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
 
     conversation: Mapped[Conversation | None] = relationship(back_populates="artifacts")
+    message: Mapped[Message | None] = relationship(back_populates="artifacts")
 
 
 class UserModelPreference(Base):

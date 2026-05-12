@@ -4,10 +4,18 @@ from httpx import AsyncClient
 
 @pytest.mark.asyncio
 async def test_history_list_and_detail(authenticated_client: AsyncClient):
+    artifact_response = await authenticated_client.post(
+        "/api/chat/artifacts",
+        data={"source": "upload"},
+        files={"file": ("screen.png", b"png-bytes", "image/png")},
+    )
+    assert artifact_response.status_code == 201
+    artifact = artifact_response.json()
+
     for index in range(3):
         stream_response = await authenticated_client.post(
             "/api/chat/stream",
-            json={"message": f"记录这次对话 {index}", "context": None, "artifact_ids": []},
+            json={"message": f"记录这次对话 {index}", "context": None, "artifact_ids": [artifact["id"]] if index == 0 else []},
         )
         assert stream_response.status_code == 200
 
@@ -31,3 +39,9 @@ async def test_history_list_and_detail(authenticated_client: AsyncClient):
     assert len(detail["messages"]) == 2
     assert detail["messages"][0]["role"] == "user"
     assert detail["messages"][1]["role"] == "assistant"
+
+    artifact_conversation = next(item for item in [*page["items"], *next_page["items"]] if item["title"] == "记录这次对话 0")
+    artifact_detail_response = await authenticated_client.get(f"/api/history/{artifact_conversation['id']}")
+    assert artifact_detail_response.status_code == 200
+    artifact_detail = artifact_detail_response.json()
+    assert artifact_detail["messages"][0]["artifacts"][0]["id"] == artifact["id"]

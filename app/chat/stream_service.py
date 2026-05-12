@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
+import json
+from collections.abc import AsyncIterator, Sequence
 
 from google.adk.errors.already_exists_error import AlreadyExistsError
+from google.adk.agents.run_config import RunConfig, StreamingMode
 from google.genai import types
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -73,7 +75,19 @@ async def choose_model(session: AsyncSession, user_id: str, request: ChatStreamR
     return (preference.conversation_model if preference else None) or settings.effective_conversation_model
 
 
-async def build_prompt(session: AsyncSession, user_id: str, conversation: Conversation, request: ChatStreamRequest) -> str:
+async def load_request_artifacts(session: AsyncSession, user_id: str, artifact_ids: Sequence[str]) -> list[MessageArtifact]:
+    if not artifact_ids:
+        return []
+    result = await session.execute(
+        select(MessageArtifact).where(
+            MessageArtifact.id.in_(artifact_ids),
+            MessageArtifact.user_id == user_id,
+        )
+    )
+    return list(result.scalars().all())
+
+
+def build_prompt(request: ChatStreamRequest, artifacts: Sequence[MessageArtifact]) -> str:
     lines = []
     if request.context:
         if request.context.page_title:
@@ -83,45 +97,24 @@ async def build_prompt(session: AsyncSession, user_id: str, conversation: Conver
         if request.context.page_text:
             lines.append("网页正文：")
             lines.append(request.context.page_text[:30000])
-    if request.artifact_ids:
-        result = await session.execute(
-            select(MessageArtifact).where(
-                MessageArtifact.id.in_(request.artifact_ids),
-                MessageArtifact.user_id == user_id,
-            )
-        )
-        artifacts = result.scalars().all()
-        if artifacts:
-            lines.append("已上传附件：")
-            for artifact in artifacts:
-                artifact.conversation_id = conversation.id
-                lines.append(f"- {artifact.filename} ({artifact.mime_type}, artifact_id={artifact.id})")
+    if artifacts:
+        lines.append("已上传附件：")
+        for artifact in artifacts:
+            lines.append(f"- {artifact.filename} ({artifact.mime_type}, artifact_id={artifact.id})")
     lines.append("用户问题：")
     lines.append(request.message)
-    await session.commit()
     return "\n".join(lines)
 
 
 async def load_artifact_parts(
-    session: AsyncSession,
-    user_id: str,
-    request: ChatStreamRequest,
+    artifacts: Sequence[MessageArtifact],
     settings: Settings,
 ) -> list[types.Part]:
-    if not request.artifact_ids:
-        return []
-    result = await session.execute(
-        select(MessageArtifact).where(
-            MessageArtifact.id.in_(request.artifact_ids),
-            MessageArtifact.user_id == user_id,
-        )
-    )
-    artifacts = result.scalars().all()
     parts: list[types.Part] = []
     for artifact in artifacts:
         part = await get_artifact_service().load_artifact(
             app_name=settings.chat_app_name,
-            user_id=user_id,
+            user_id=artifact.user_id,
             filename=f"user:{artifact.storage_filename}",
             version=artifact.version,
         )
@@ -130,19 +123,61 @@ async def load_artifact_parts(
     return parts
 
 
-def extract_event_text(event: object) -> str:
+def merge_complete_text(current: str, incoming: str) -> str:
+    if not current or incoming.startswith(current):
+        return incoming
+    if current.startswith(incoming):
+        return current
+    return current + incoming
+
+
+def extract_event_texts(event: object) -> tuple[str, str]:
     content = getattr(event, "content", None)
     parts = getattr(content, "parts", None) or []
-    text_chunks = [part.text for part in parts if getattr(part, "text", None)]
-    return "".join(text_chunks)
+    visible_chunks: list[str] = []
+    thought_chunks: list[str] = []
+    for part in parts:
+        text = getattr(part, "text", None)
+        if not text:
+            continue
+        if getattr(part, "thought", False):
+            thought_chunks.append(text)
+        else:
+            visible_chunks.append(text)
+    return "".join(visible_chunks), "".join(thought_chunks)
 
 
-async def run_mock_stream(prompt: str) -> AsyncIterator[str]:
+def is_final_response(event: object) -> bool:
+    checker = getattr(event, "is_final_response", None)
+    if checker is None:
+        return False
+    try:
+        return bool(checker())
+    except Exception:
+        return False
+
+
+def serialize_adk_event(event: object) -> str:
+    serializer = getattr(event, "model_dump_json", None)
+    if serializer is not None:
+        return serializer(exclude_none=True, by_alias=True)
+    return json.dumps(event, ensure_ascii=False)
+
+
+def mock_adk_event(text: str) -> dict[str, object]:
+    return {
+        "author": "summarix_web_assistant",
+        "content": {"role": "model", "parts": [{"text": text}]},
+        "partial": False,
+        "turnComplete": True,
+    }
+
+
+def build_mock_response(prompt: str) -> str:
     text = "这是本地开发模式下的模拟回复。已收到网页上下文和用户问题，可以在配置模型密钥后切换到真实 ADK 流式响应。"
     if "网页标题：" in prompt:
         text += "我会优先结合网页标题、正文和截图附件进行总结。"
-    for chunk in text.split("，"):
-        yield chunk + "，"
+    return text
 
 
 async def stream_chat_response(
@@ -153,38 +188,69 @@ async def stream_chat_response(
 ) -> AsyncIterator[dict[str, str]]:
     settings = settings or get_settings()
     conversation = await get_or_create_conversation(session, user_id, request, settings)
-    prompt = await build_prompt(session, user_id, conversation, request)
+    artifacts = await load_request_artifacts(session, user_id, request.artifact_ids)
+    prompt = build_prompt(request, artifacts)
     user_message = Message(conversation_id=conversation.id, role="user", content=request.message)
     session.add(user_message)
+    await session.flush()
+    for artifact in artifacts:
+        artifact.conversation_id = conversation.id
+        artifact.message_id = user_message.id
     await session.commit()
-    yield {"event": "conversation", "data": conversation.id}
+    yield {
+        "event": "conversation",
+        "data": json.dumps({"id": conversation.id, "user_message_id": user_message.id}, ensure_ascii=False),
+    }
 
-    full_response = ""
+    partial_response = ""
+    final_response = ""
+    thought_fallback_response = ""
     try:
         if settings.chat_agent_mode == "mock":
-            async for chunk in run_mock_stream(prompt):
-                full_response += chunk
-                yield {"event": "delta", "data": chunk}
+            final_response = build_mock_response(prompt)
+            yield {"event": "adk_event", "data": serialize_adk_event(mock_adk_event(final_response))}
         else:
             model_name = await choose_model(session, user_id, request, settings)
             runner = create_runner(model_name, settings)
-            message_parts = [types.Part.from_text(text=prompt), *await load_artifact_parts(session, user_id, request, settings)]
+            message_parts = [types.Part.from_text(text=prompt), *await load_artifact_parts(artifacts, settings)]
             async for event in runner.run_async(
                 user_id=user_id,
                 session_id=conversation.adk_session_id,
                 new_message=types.Content(role="user", parts=message_parts),
+                run_config=RunConfig(streaming_mode=StreamingMode.SSE),
             ):
-                chunk = extract_event_text(event)
-                if not chunk:
+                event_id = getattr(event, "id", None)
+                payload = {"event": "adk_event", "data": serialize_adk_event(event)}
+                if event_id:
+                    payload["id"] = str(event_id)
+                yield payload
+
+                visible_text, thought_text = extract_event_texts(event)
+                if not visible_text and not thought_text:
                     continue
-                full_response += chunk
-                yield {"event": "delta", "data": chunk}
+                if getattr(event, "partial", None) is True:
+                    if visible_text:
+                        partial_response += visible_text
+                    if thought_text:
+                        thought_fallback_response += thought_text
+                elif is_final_response(event):
+                    if visible_text:
+                        final_response = merge_complete_text(partial_response or final_response, visible_text)
+                    if thought_text:
+                        # 某些模型会把最终可见回复错误地放进 thought part，这里做正文兜底。
+                        thought_fallback_response = merge_complete_text(thought_fallback_response, thought_text)
     except Exception:
         logger.exception("AI 响应生成失败，user_id=%s conversation_id=%s", user_id, conversation.id)
         yield {"event": "error", "data": "AI 响应生成失败，请稍后重试。"}
         return
 
+    full_response = final_response or partial_response or thought_fallback_response
+    if not full_response:
+        yield {"event": "done", "data": ""}
+        return
+
     assistant_message = Message(conversation_id=conversation.id, role="assistant", content=full_response)
     session.add(assistant_message)
     await session.commit()
+    yield {"event": "persisted", "data": json.dumps({"assistant_message_id": assistant_message.id}, ensure_ascii=False)}
     yield {"event": "done", "data": assistant_message.id}
