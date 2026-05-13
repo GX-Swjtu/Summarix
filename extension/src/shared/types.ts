@@ -91,6 +91,13 @@ export type ExtractedPage = {
   text: string;
 };
 
+export type ActiveTabInfo = {
+  id?: number;
+  title?: string;
+  url?: string;
+};
+
 export type BackgroundRequest =
   | { type: "capture-visible-tab" }
-  | { type: "extract-page" };
+  | { type: "extract-page" }
+  | { type: "get-active-tab" };

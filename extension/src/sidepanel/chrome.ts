@@ -1,4 +1,4 @@
-import type { ExtractedPage } from "../shared/types";
+import type { ActiveTabInfo, ExtractedPage } from "../shared/types";
 
 type RuntimeResponse<T> = { ok: true } & T | { ok: false; error: string };
 
@@ -26,4 +26,9 @@ export async function captureVisibleTab(): Promise<string> {
 export async function extractCurrentPage(): Promise<ExtractedPage> {
   const response = await sendRuntimeMessage<{ page: ExtractedPage }>({ type: "extract-page" });
   return response.page;
+}
+
+export async function getActiveTabInfo(): Promise<ActiveTabInfo> {
+  const response = await sendRuntimeMessage<{ tab: ActiveTabInfo }>({ type: "get-active-tab" });
+  return response.tab;
 }

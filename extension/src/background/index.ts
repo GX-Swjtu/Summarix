@@ -5,6 +5,24 @@ chrome.runtime.onInstalled.addListener(() => {
 });
 
 chrome.runtime.onMessage.addListener((request: BackgroundRequest, _sender, sendResponse) => {
+  if (request.type === "get-active-tab") {
+    chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
+      if (!tab) {
+        sendResponse({ ok: false, error: "没有可用的当前标签页" });
+        return;
+      }
+      sendResponse({
+        ok: true,
+        tab: {
+          id: tab.id,
+          title: tab.title,
+          url: tab.url,
+        },
+      });
+    });
+    return true;
+  }
+
   if (request.type === "capture-visible-tab") {
     chrome.tabs.captureVisibleTab({ format: "png" }, (dataUrl) => {
       if (chrome.runtime.lastError || !dataUrl) {

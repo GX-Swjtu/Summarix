@@ -172,12 +172,14 @@ export async function streamChat(options: {
   message: string;
   context?: PageContext | null;
   artifactIds?: string[];
+  signal?: AbortSignal;
   onConversation: (payload: { id: string; user_message_id?: string }) => void;
   onAdkEvent: (event: AdkEvent) => void;
   onPersisted?: (payload: { assistant_message_id?: string }) => void;
 }): Promise<void> {
   const response = await fetchStreamResponse("/api/chat/stream", {
     method: "POST",
+    signal: options.signal,
     body: JSON.stringify({
       conversation_id: options.conversationId || null,
       message: options.message,

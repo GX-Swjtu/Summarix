@@ -20,6 +20,19 @@ from app.db.models import Conversation, Message, MessageArtifact, UserModelPrefe
 
 logger = logging.getLogger(__name__)
 
+SUMMARY_INTENT_KEYWORDS = (
+    "总结",
+    "概括",
+    "摘要",
+    "归纳",
+    "提炼",
+    "要点",
+    "重点",
+    "summarize",
+    "summary",
+    "tl;dr",
+)
+
 
 async def ensure_adk_session(user_id: str, conversation: Conversation, settings: Settings) -> None:
     if settings.chat_agent_mode != "adk":
@@ -72,6 +85,11 @@ async def choose_model(session: AsyncSession, user_id: str, request: ChatStreamR
     has_artifact = bool(request.artifact_ids)
     if has_artifact:
         return (preference.vision_analysis_model if preference else None) or settings.effective_vision_model
+    message = request.message.lower()
+    has_page_text = bool(request.context and request.context.page_text)
+    has_summary_intent = any(keyword in message for keyword in SUMMARY_INTENT_KEYWORDS)
+    if has_page_text or has_summary_intent:
+        return (preference.text_summary_model if preference else None) or settings.effective_text_model
     return (preference.conversation_model if preference else None) or settings.effective_conversation_model
 
 
@@ -88,19 +106,35 @@ async def load_request_artifacts(session: AsyncSession, user_id: str, artifact_i
 
 
 def build_prompt(request: ChatStreamRequest, artifacts: Sequence[MessageArtifact]) -> str:
-    lines = []
+    lines = [
+        "请作为 Summarix 浏览器助手回答用户问题。",
+        "输出要求：默认使用简体中文；使用清晰 Markdown；只基于已提供的网页、URL、截图或对话上下文作答；无法确认时请说明。",
+        "",
+        "## 当前网页上下文",
+    ]
     if request.context:
         if request.context.page_title:
-            lines.append(f"网页标题：{request.context.page_title}")
+            lines.append(f"- 标题：{request.context.page_title}")
         if request.context.page_url:
-            lines.append(f"网页地址：{request.context.page_url}")
+            lines.append(f"- URL：{request.context.page_url}")
         if request.context.page_text:
-            lines.append("网页正文：")
+            lines.append(f"- 正文长度：{len(request.context.page_text)} 字符")
+            lines.append("")
+            lines.append("### 网页正文")
             lines.append(request.context.page_text[:30000])
+        if not request.context.page_title and not request.context.page_url and not request.context.page_text:
+            lines.append("- 未提供网页正文、标题或 URL。")
+    else:
+        lines.append("- 未提供网页上下文。")
+    lines.append("")
+    lines.append("## 附件")
     if artifacts:
-        lines.append("已上传附件：")
         for artifact in artifacts:
             lines.append(f"- {artifact.filename} ({artifact.mime_type}, artifact_id={artifact.id})")
+    else:
+        lines.append("- 未提供附件。")
+    lines.append("")
+    lines.append("## 用户问题")
     lines.append("用户问题：")
     lines.append(request.message)
     return "\n".join(lines)
@@ -175,7 +209,7 @@ def mock_adk_event(text: str) -> dict[str, object]:
 
 def build_mock_response(prompt: str) -> str:
     text = "这是本地开发模式下的模拟回复。已收到网页上下文和用户问题，可以在配置模型密钥后切换到真实 ADK 流式响应。"
-    if "网页标题：" in prompt:
+    if "### 网页正文" in prompt or "- 标题：" in prompt:
         text += "我会优先结合网页标题、正文和截图附件进行总结。"
     return text
 

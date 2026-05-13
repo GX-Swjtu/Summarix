@@ -9,9 +9,9 @@ from google.adk.agents.run_config import StreamingMode
 
 from app.api.schemas import ChatStreamRequest
 from app.chat.runner import create_runner, get_adk_session_service
-from app.chat.stream_service import ensure_adk_session, stream_chat_response
+from app.chat.stream_service import choose_model, ensure_adk_session, stream_chat_response
 from app.core.config import Settings
-from app.db.models import Conversation, Message, User
+from app.db.models import Conversation, Message, User, UserModelPreference
 from app.db.session import AsyncSessionLocal
 
 
@@ -327,3 +327,59 @@ def test_create_runner_uses_configured_model_name(monkeypatch: pytest.MonkeyPatc
     create_runner("dashscope/qwen3.5-flash", settings)
 
     assert calls["model_name"] == "dashscope/qwen3.5-flash"
+
+
+@pytest.mark.asyncio
+async def test_choose_model_routes_artifacts_page_text_and_conversation():
+    settings = Settings(
+        jwt_secret_key="x" * 32,
+        database_url="sqlite+aiosqlite:///:memory:",
+        text_summary_model="default-text-model",
+        vision_analysis_model="default-vision-model",
+        conversation_model="default-conversation-model",
+    )
+
+    async with AsyncSessionLocal() as session:
+        user = User(email="routing@example.com", password_hash="hashed")
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+        session.add(
+            UserModelPreference(
+                user_id=user.id,
+                text_summary_model="user-text-model",
+                vision_analysis_model="user-vision-model",
+                conversation_model="user-conversation-model",
+            )
+        )
+        await session.commit()
+
+        artifact_model = await choose_model(
+            session,
+            user.id,
+            ChatStreamRequest(message="请解释这张截图", context=None, artifact_ids=["artifact-id"]),
+            settings,
+        )
+        page_text_model = await choose_model(
+            session,
+            user.id,
+            ChatStreamRequest(message="帮我看看这篇文章", context={"page_text": "网页正文"}, artifact_ids=[]),
+            settings,
+        )
+        summary_model = await choose_model(
+            session,
+            user.id,
+            ChatStreamRequest(message="请总结一下", context=None, artifact_ids=[]),
+            settings,
+        )
+        conversation_model = await choose_model(
+            session,
+            user.id,
+            ChatStreamRequest(message="你好", context=None, artifact_ids=[]),
+            settings,
+        )
+
+    assert artifact_model == "user-vision-model"
+    assert page_text_model == "user-text-model"
+    assert summary_model == "user-text-model"
+    assert conversation_model == "user-conversation-model"
