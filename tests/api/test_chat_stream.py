@@ -192,7 +192,7 @@ async def test_stream_chat_returns_sse_error_when_generation_fails(
 
 
 @pytest.mark.asyncio
-async def test_stream_chat_returns_generic_error_when_image_generation_fails(monkeypatch: pytest.MonkeyPatch):
+async def test_stream_chat_returns_image_unsupported_error_when_image_generation_fails(monkeypatch: pytest.MonkeyPatch):
     async def fake_ensure_adk_session(*_: object, **__: object) -> None:
         return None
 
@@ -239,6 +239,46 @@ async def test_stream_chat_returns_generic_error_when_image_generation_fails(mon
                 session,
                 user.id,
                 ChatStreamRequest(message="请解释截图", context=None, artifact_ids=[artifact.id]),
+                settings,
+            )
+        ]
+
+    error_event = next(event for event in events if event["event"] == "error")
+    assert error_event["data"] == "当前模型不支持图片输入，请更换支持图像输入的模型后重试。"
+    assert not any(event["event"] == "done" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_keeps_generic_error_when_no_image_artifact(monkeypatch: pytest.MonkeyPatch):
+    async def fake_ensure_adk_session(*_: object, **__: object) -> None:
+        return None
+
+    class FailingRunner:
+        async def run_async(self, **_: object):
+            raise RuntimeError("model does not support image input")
+            yield StubEvent(text="", thought=False, partial=False, final=False, turn_complete=False)
+
+    monkeypatch.setattr("app.chat.stream_service.ensure_adk_session", fake_ensure_adk_session)
+    monkeypatch.setattr("app.chat.stream_service.create_runner", lambda *_: FailingRunner())
+
+    settings = Settings(
+        jwt_secret_key="x" * 32,
+        database_url="sqlite+aiosqlite:///:memory:",
+        chat_agent_mode="adk",
+    )
+
+    async with AsyncSessionLocal() as session:
+        user = User(email="text-only-error@example.com", password_hash="hashed")
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+
+        events = [
+            event
+            async for event in stream_chat_response(
+                session,
+                user.id,
+                ChatStreamRequest(message="普通文本问题", context=None, artifact_ids=[]),
                 settings,
             )
         ]

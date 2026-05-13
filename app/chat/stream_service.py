@@ -21,6 +21,18 @@ from app.db.models import Conversation, Message, MessageArtifact, UserModelPrefe
 
 logger = logging.getLogger(__name__)
 
+IMAGE_UNSUPPORTED_ERROR_MESSAGE = "当前模型不支持图片输入，请更换支持图像输入的模型后重试。"
+GENERIC_STREAM_ERROR_MESSAGE = "AI 响应生成失败，请稍后重试。"
+IMAGE_UNSUPPORTED_ERROR_PATTERNS = (
+    "does not support image",
+    "doesn't support image",
+    "image input",
+    "image is not supported",
+    "vision input",
+    "vision is not supported",
+    "multimodal",
+)
+
 async def ensure_adk_session(user_id: str, conversation: Conversation, settings: Settings) -> None:
     if settings.chat_agent_mode != "adk":
         return
@@ -88,6 +100,17 @@ async def load_request_artifacts(session: AsyncSession, user_id: str, artifact_i
         )
     )
     return list(result.scalars().all())
+
+
+def has_image_artifacts(artifacts: Sequence[MessageArtifact]) -> bool:
+    return any((artifact.mime_type or "").startswith("image/") for artifact in artifacts)
+
+
+def is_image_unsupported_error(error: Exception, artifacts: Sequence[MessageArtifact]) -> bool:
+    if not has_image_artifacts(artifacts):
+        return False
+    message = str(error).lower()
+    return any(pattern in message for pattern in IMAGE_UNSUPPORTED_ERROR_PATTERNS)
 
 
 def build_prompt(request: ChatStreamRequest, artifacts: Sequence[MessageArtifact]) -> str:
@@ -257,9 +280,10 @@ async def stream_chat_response(
                     if thought_text:
                         # 某些模型会把最终可见回复错误地放进 thought part，这里做正文兜底。
                         thought_fallback_response = merge_complete_text(thought_fallback_response, thought_text)
-    except Exception:
+    except Exception as error:
         logger.exception("AI 响应生成失败，user_id=%s conversation_id=%s", user_id, conversation.id)
-        yield {"event": "error", "data": "AI 响应生成失败，请稍后重试。"}
+        error_message = IMAGE_UNSUPPORTED_ERROR_MESSAGE if is_image_unsupported_error(error, artifacts) else GENERIC_STREAM_ERROR_MESSAGE
+        yield {"event": "error", "data": error_message}
         return
 
     full_response = final_response or partial_response or thought_fallback_response
