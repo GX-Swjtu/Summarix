@@ -479,6 +479,13 @@ def test_create_web_assistant_builds_delegating_agent_team():
         "short_video_script_expert",
     }
     assert all(sub_agent.description for sub_agent in agent.sub_agents)
+    xiaohongshu_agent = next(
+        sub_agent for sub_agent in agent.sub_agents if sub_agent.name == "xiaohongshu_copy_expert"
+    )
+    assert "至少出现 6 个表情" in xiaohongshu_agent.instruction
+    assert "少用“首先、其次、最后、总结来说”这类总结腔" in xiaohongshu_agent.instruction
+    assert "直接输出一篇用户可以复制粘贴发布的小红书成品文案" in xiaohongshu_agent.instruction
+    assert "不要再用“爆点标题”“开场引子”“正文”“标签”“互动引导”这类小节标题" in xiaohongshu_agent.instruction
 
 
 @pytest.mark.asyncio
