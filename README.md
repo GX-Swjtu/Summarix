@@ -1,5 +1,7 @@
 # Summarix
 
+[![CI](https://github.com/GX-Swjtu/Summarix/actions/workflows/ci.yml/badge.svg)](https://github.com/GX-Swjtu/Summarix/actions/workflows/ci.yml)
+
 Summarix 是一个基于 Chromium Side Panel 的 AI 网页总结插件，配套 FastAPI 后端。插件负责登录、网页正文提取、截图上传、流式聊天、历史查看、模型设置，以及把网页主体文章快捷转换为小红书文案和短视频脚本；后端负责用户认证、PostgreSQL 数据存储、ADK agent 调用、LiteLLM 模型切换和 SSE 流式响应。
 
 ## 项目结构

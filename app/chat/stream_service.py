@@ -114,7 +114,7 @@ def is_image_unsupported_error(error: Exception, artifacts: Sequence[MessageArti
     return any(pattern in message for pattern in IMAGE_UNSUPPORTED_ERROR_PATTERNS)
 
 
-def build_prompt(request: ChatStreamRequest, artifacts: Sequence[MessageArtifact]) -> str:
+def build_prompt(request: ChatStreamRequest, artifacts: Sequence[MessageArtifact], conversation: Conversation | None = None) -> str:
     lines = [
         "请作为 Summarix 浏览器助手回答用户问题。",
         "输出要求：默认使用简体中文；使用清晰 Markdown；只基于已提供的网页、URL、截图或对话上下文作答；无法确认时请说明。",
@@ -132,6 +132,13 @@ def build_prompt(request: ChatStreamRequest, artifacts: Sequence[MessageArtifact
             lines.append(request.context.page_text[:PAGE_TEXT_PROMPT_LIMIT])
         if not request.context.page_title and not request.context.page_url and not request.context.page_text:
             lines.append("- 未提供网页正文、标题或 URL。")
+    elif conversation and (conversation.page_title or conversation.page_url):
+        lines.append("- 本轮未附加新的网页正文，请沿用本会话历史中已经提供的网页上下文继续回答。")
+        lines.append("- 不要仅因为本轮未重新附加正文就判断缺少网页内容；只有历史上下文确实不足时才说明无法确认。")
+        if conversation.page_title:
+            lines.append(f"- 历史页面标题：{conversation.page_title}")
+        if conversation.page_url:
+            lines.append(f"- 历史页面 URL：{conversation.page_url}")
     else:
         lines.append("- 未提供网页上下文。")
     lines.append("")
@@ -259,7 +266,7 @@ async def stream_chat_response(
     settings = settings or get_settings()
     conversation = await get_or_create_conversation(session, user_id, request, settings)
     artifacts = await load_request_artifacts(session, user_id, request.artifact_ids)
-    prompt = build_prompt(request, artifacts)
+    prompt = build_prompt(request, artifacts, conversation)
     user_message = Message(conversation_id=conversation.id, role="user", content=request.message)
     session.add(user_message)
     await session.flush()

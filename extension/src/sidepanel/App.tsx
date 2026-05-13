@@ -89,6 +89,13 @@ type QuickAction = {
   needsScreenshot?: boolean;
 };
 
+type ContextSendMode = "followup" | "attachPage";
+
+type SendPromptOptions = {
+  extraDrafts?: DraftAttachment[];
+  contextMode?: ContextSendMode;
+};
+
 const HISTORY_PAGE_SIZE = 20;
 const QUICK_ACTIONS: QuickAction[] = [
   {
@@ -426,6 +433,7 @@ function ChatView({
   const [activeTab, setActiveTab] = useState<ActiveTabInfo | null>(null);
   const [contextDirty, setContextDirty] = useState(false);
   const [contextNote, setContextNote] = useState<string | null>(null);
+  const [contextSendMode, setContextSendMode] = useState<ContextSendMode | null>(null);
   const [drafts, setDrafts] = useState<DraftAttachment[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
@@ -449,6 +457,11 @@ function ChatView({
 
   const hasContext = Boolean(page?.text || drafts.length > 0 || conversationId);
   const busy = sending || extracting || capturing;
+  const tabLooksChanged = Boolean(page?.url && activeTab?.url && activeTab.url !== page.url);
+  const pageNeedsRefresh = contextDirty || tabLooksChanged;
+  const shouldAutoAttachFirstPage = !conversationId && messages.length === 0 && Boolean(page) && !pageNeedsRefresh;
+  const selectedContextSendMode: ContextSendMode = contextSendMode ?? (shouldAutoAttachFirstPage ? "attachPage" : "followup");
+  const attachContextLabel = pageNeedsRefresh ? "附新页" : "附当前页";
 
   useEffect(() => {
     pageRef.current = page;
@@ -531,6 +544,7 @@ function ChatView({
       setContextDirty(true);
       setContextNote("已载入历史会话，可刷新当前网页正文后继续追问");
     }
+    setContextSendMode("followup");
     onResumed();
   }, [onResumed, resumeConversation]);
 
@@ -686,17 +700,42 @@ function ChatView({
     }));
   }
 
-  async function sendPrompt(messageText = input.trim(), extraDrafts: DraftAttachment[] = [], contextOverride?: ExtractedPage | null) {
+  function getEffectiveContextSendMode(contextMode?: ContextSendMode): ContextSendMode {
+    if (contextMode) return contextMode;
+    if (contextSendMode) return contextSendMode;
+    return !conversationId && messages.length === 0 && pageRef.current && !isRequestPageStale() ? "attachPage" : "followup";
+  }
+
+  function isRequestPageStale(): boolean {
+    const currentPage = pageRef.current;
+    const currentTab = activeTabRef.current;
+    return contextDirty || Boolean(currentPage?.url && currentTab?.url && currentTab.url !== currentPage.url);
+  }
+
+  async function resolveRequestPage(contextMode: ContextSendMode): Promise<ExtractedPage | null | undefined> {
+    if (contextMode === "followup") return null;
+    if (pageRef.current && !isRequestPageStale()) return pageRef.current;
+    if (extracting) {
+      setError("正在读取网页，请稍候再发送");
+      return undefined;
+    }
+    const nextPage = await extractPage();
+    return nextPage || undefined;
+  }
+
+  async function sendPrompt(messageText = input.trim(), options: SendPromptOptions = {}) {
     const text = messageText.trim();
     if (!text || sending) return;
     setError(null);
+    const contextMode = getEffectiveContextSendMode(options.contextMode);
+    const requestPage = await resolveRequestPage(contextMode);
+    if (requestPage === undefined) return;
     setSending(true);
     const controller = new AbortController();
     abortRef.current = controller;
     const assistantId = makeLocalId();
     try {
-      const draftSnapshot = [...drafts, ...extraDrafts];
-      const requestPage = contextOverride === undefined ? page : contextOverride;
+      const draftSnapshot = [...drafts, ...(options.extraDrafts || [])];
       const pageReference = requestPage ? makePageReferenceAttachment(requestPage) : null;
       const uploadedArtifacts = await uploadDrafts(draftSnapshot);
       const userMessage: LocalMessage = {
@@ -740,23 +779,26 @@ function ChatView({
       }
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
+      setContextSendMode("followup");
       setSending(false);
     }
   }
 
   async function runQuickAction(action: QuickAction) {
-    let requestPage = page;
     const extraDrafts: DraftAttachment[] = [];
-    if (action.needsPage && (!requestPage || contextDirty)) {
-      requestPage = await extractPage();
-      if (!requestPage) return;
-    }
+    const contextMode: ContextSendMode = action.needsPage
+      ? "attachPage"
+      : action.label === "继续追问"
+        ? "followup"
+        : contextSendMode === "attachPage"
+          ? "attachPage"
+          : "followup";
     if (action.needsScreenshot && drafts.length === 0) {
       const screenshot = await createScreenshotDraft();
       if (!screenshot) return;
       extraDrafts.push(screenshot);
     }
-    await sendPrompt(action.prompt, extraDrafts, requestPage);
+    await sendPrompt(action.prompt, { extraDrafts, contextMode });
   }
 
   function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -816,6 +858,31 @@ function ChatView({
       {messages.length > 0 && <QuickActionGrid actions={QUICK_ACTIONS} compact disabled={busy} onAction={runQuickAction} />}
       {dragActive && <div className="drop-hint"><ImagePlus size={20} />松开即可添加图片</div>}
       {drafts.length > 0 && <DraftStrip drafts={drafts} onRemove={removeDraft} />}
+
+      <div className="context-mode-row">
+        <div className="context-mode-toggle" role="group" aria-label="下一条消息上下文">
+          <button
+            type="button"
+            className={selectedContextSendMode === "followup" ? "active" : ""}
+            title="下一条作为追问发送，不重新附加网页正文"
+            onClick={() => setContextSendMode("followup")}
+            disabled={sending}
+          >
+            <MessageSquare size={14} />
+            追问
+          </button>
+          <button
+            type="button"
+            className={selectedContextSendMode === "attachPage" ? "active" : ""}
+            title="下一条会读取并附加当前网页正文"
+            onClick={() => setContextSendMode("attachPage")}
+            disabled={sending}
+          >
+            <Link size={14} />
+            {attachContextLabel}
+          </button>
+        </div>
+      </div>
 
       <div className="composer">
         <input

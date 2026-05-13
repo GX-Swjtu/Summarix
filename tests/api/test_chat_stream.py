@@ -145,6 +145,71 @@ async def test_stream_chat_returns_page_reference_artifact(authenticated_client:
 
 
 @pytest.mark.asyncio
+async def test_stream_chat_followup_without_context_does_not_create_page_reference(
+    authenticated_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured_prompts: list[str] = []
+
+    def capture_mock_response(prompt: str) -> str:
+        captured_prompts.append(prompt)
+        return "模拟回复"
+
+    monkeypatch.setattr("app.chat.stream_service.build_mock_response", capture_mock_response)
+
+    first_response = await authenticated_client.post(
+        "/api/chat/stream",
+        json={
+            "message": "请总结这个页面",
+            "context": {
+                "page_url": "https://example.com/first",
+                "page_title": "首轮页面",
+                "page_text": "首轮页面正文，用来验证追问不会重复附加。",
+            },
+            "artifact_ids": [],
+        },
+    )
+    assert first_response.status_code == 200
+    first_events = parse_sse_events(first_response.text)
+    first_payload = json.loads(next(event for event in first_events if event["event"] == "conversation")["data"])
+    assert len(first_payload["reference_artifacts"]) == 1
+
+    followup_response = await authenticated_client.post(
+        "/api/chat/stream",
+        json={
+            "conversation_id": first_payload["id"],
+            "message": "继续回答：这个页面最值得追问什么？",
+            "context": None,
+            "artifact_ids": [],
+        },
+    )
+    assert followup_response.status_code == 200
+    followup_events = parse_sse_events(followup_response.text)
+    followup_payload = json.loads(next(event for event in followup_events if event["event"] == "conversation")["data"])
+    assert followup_payload["id"] == first_payload["id"]
+    assert followup_payload["user_message_id"]
+    assert followup_payload["reference_artifacts"] == []
+    assert any(event["event"] == "persisted" for event in followup_events)
+    assert any(event["event"] == "done" for event in followup_events)
+    assert len(captured_prompts) == 2
+    assert "首轮页面正文，用来验证追问不会重复附加。" in captured_prompts[0]
+    assert "本轮未附加新的网页正文，请沿用本会话历史中已经提供的网页上下文继续回答。" in captured_prompts[1]
+    assert "历史页面标题：首轮页面" in captured_prompts[1]
+    assert "历史页面 URL：https://example.com/first" in captured_prompts[1]
+    assert "未提供网页上下文" not in captured_prompts[1]
+    assert "首轮页面正文，用来验证追问不会重复附加。" not in captured_prompts[1]
+
+    detail_response = await authenticated_client.get(f"/api/history/{first_payload['id']}")
+    assert detail_response.status_code == 200
+    detail = detail_response.json()
+    assert detail["page_url"] == "https://example.com/first"
+    assert len(detail["messages"]) == 4
+    assert [artifact["source"] for artifact in detail["messages"][0]["artifacts"]] == ["page_text"]
+    assert detail["messages"][2]["artifacts"] == []
+    assert [artifact["source"] for artifact in detail["artifacts"]] == ["page_text"]
+
+
+@pytest.mark.asyncio
 async def test_stream_chat_uses_single_agent_team_entrypoint_in_adk_mode(monkeypatch: pytest.MonkeyPatch):
     async def fake_ensure_adk_session(*_: object, **__: object) -> None:
         return None
