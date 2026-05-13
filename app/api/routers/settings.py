@@ -14,13 +14,11 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 def build_settings_response(preference: UserModelPreference | None, settings: Settings) -> ModelSettingsResponse:
     return ModelSettingsResponse(
         text_summary_model=preference.text_summary_model if preference else None,
-        vision_analysis_model=preference.vision_analysis_model if preference else None,
         conversation_model=preference.conversation_model if preference else None,
         xiaohongshu_model=preference.xiaohongshu_model if preference else None,
         short_video_script_model=preference.short_video_script_model if preference else None,
         defaults={
             "text_summary_model": settings.effective_text_model,
-            "vision_analysis_model": settings.effective_vision_model,
             "conversation_model": settings.effective_conversation_model,
             "xiaohongshu_model": settings.effective_xiaohongshu_model,
             "short_video_script_model": settings.effective_short_video_script_model,
@@ -51,7 +49,6 @@ async def update_model_settings(
         preference = UserModelPreference(user_id=current_user.id)
         session.add(preference)
     preference.text_summary_model = payload.text_summary_model
-    preference.vision_analysis_model = payload.vision_analysis_model
     preference.conversation_model = payload.conversation_model
     preference.xiaohongshu_model = payload.xiaohongshu_model
     preference.short_video_script_model = payload.short_video_script_model

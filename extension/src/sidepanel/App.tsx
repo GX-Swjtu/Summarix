@@ -381,6 +381,7 @@ function ChatView({
   const [contextDirty, setContextDirty] = useState(false);
   const [contextNote, setContextNote] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<DraftAttachment[]>([]);
+  const [imageModelWarning, setImageModelWarning] = useState<string | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [extracting, setExtracting] = useState(false);
@@ -651,6 +652,10 @@ function ChatView({
     try {
       const draftSnapshot = [...drafts, ...extraDrafts];
       const uploadedArtifacts = await uploadDrafts(draftSnapshot);
+      const hasImageArtifacts = uploadedArtifacts.some((artifact) => artifact.mime_type.startsWith("image/"));
+      setImageModelWarning(
+        hasImageArtifacts ? "已附加图片，请确认当前任务模型支持图像输入；若不支持，AI 可能返回生成失败。" : null
+      );
       const userMessage: LocalMessage = { id: makeLocalId(), role: "user", content: text, artifacts: uploadedArtifacts };
       setMessages((items) => [...items, userMessage, { id: assistantId, role: "assistant", content: "" }]);
       setInput("");
@@ -725,6 +730,14 @@ function ChatView({
           )}
         </div>
       </div>
+
+      {imageModelWarning && (
+        <div className="notice warning inline chat-warning" role="status">
+          <AlertTriangle size={16} />
+          <span>{imageModelWarning}</span>
+          <button title="关闭提示" onClick={() => setImageModelWarning(null)}><X size={14} /></button>
+        </div>
+      )}
 
       <div className="message-list">
         {messages.length === 0 && (
@@ -1090,7 +1103,6 @@ function SettingsView({ setError }: { setError: (value: string | null) => void }
     setModels((value) => value && {
       ...value,
       text_summary_model: null,
-      vision_analysis_model: null,
       conversation_model: null,
       xiaohongshu_model: null,
       short_video_script_model: null
@@ -1138,17 +1150,13 @@ function SettingsView({ setError }: { setError: (value: string | null) => void }
         <div className="section-heading">
           <div>
             <strong>模型</strong>
-            <span>留空时使用后端默认值；快捷文案和脚本任务会优先走对应模型，若会结合截图改写，请确保对应模型支持 vision 输入。</span>
+            <span>留空时使用后端默认值；带图片的任务会使用当前任务模型，请选择支持图像输入的模型。</span>
           </div>
           <button type="button" onClick={resetModels} disabled={!models}><RotateCcw size={15} />默认</button>
         </div>
         <label>
           文本总结模型
           <input value={models?.text_summary_model || ""} placeholder={models?.defaults.text_summary_model} onChange={(event) => setModels((value) => value && { ...value, text_summary_model: event.target.value })} />
-        </label>
-        <label>
-          视觉分析模型
-          <input value={models?.vision_analysis_model || ""} placeholder={models?.defaults.vision_analysis_model} onChange={(event) => setModels((value) => value && { ...value, vision_analysis_model: event.target.value })} />
         </label>
         <label>
           对话模型

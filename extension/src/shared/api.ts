@@ -161,7 +161,6 @@ export async function updateModelSettings(payload: Partial<ModelSettings>): Prom
     method: "PUT",
     body: JSON.stringify({
       text_summary_model: payload.text_summary_model || null,
-      vision_analysis_model: payload.vision_analysis_model || null,
       conversation_model: payload.conversation_model || null,
       xiaohongshu_model: payload.xiaohongshu_model || null,
       short_video_script_model: payload.short_video_script_model || null

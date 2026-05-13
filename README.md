@@ -45,9 +45,9 @@ uv run --env-file .env main.py
 
 LiteLLM 模型请直接使用 `provider/model` 形式，例如 `dashscope/qwen3.5-flash` 或 `dashscope/qwen3.5-flash`。后端不会再自动补全 provider。
 
-模型可按任务分别配置：`TEXT_SUMMARY_MODEL` 用于网页总结，`VISION_ANALYSIS_MODEL` 用于截图分析，`CONVERSATION_MODEL` 用于通用对话，`XIAOHONGSHU_MODEL` 用于小红书文案，`SHORT_VIDEO_SCRIPT_MODEL` 用于短视频脚本。用户也可以在 Side Panel 设置页覆盖这些模型。
+模型可按任务分别配置：`TEXT_SUMMARY_MODEL` 用于网页总结，`CONVERSATION_MODEL` 用于通用对话，`XIAOHONGSHU_MODEL` 用于小红书文案，`SHORT_VIDEO_SCRIPT_MODEL` 用于短视频脚本。用户也可以在 Side Panel 设置页覆盖这些模型。
 
-当前快捷改写链路会优先命中小红书文案模型和短视频脚本模型；如果这类请求会同时携带截图，请确保 `XIAOHONGSHU_MODEL` 和 `SHORT_VIDEO_SCRIPT_MODEL` 指向支持 vision 输入的模型。
+截图和图片不再配置单独的视觉分析模型，会随当前任务交给对应模型处理；聊天界面会在发送图片时提醒用户确认模型支持图像输入。
 
 ## 插件本地运行
 

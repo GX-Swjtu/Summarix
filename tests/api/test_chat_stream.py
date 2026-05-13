@@ -8,8 +8,9 @@ from google.adk.errors.already_exists_error import AlreadyExistsError
 from google.adk.agents.run_config import StreamingMode
 
 from app.api.schemas import ChatStreamRequest
+from app.chat.agent_factory import WebAssistantModelConfig, create_web_assistant
 from app.chat.runner import create_runner, get_adk_session_service
-from app.chat.stream_service import choose_model, ensure_adk_session, stream_chat_response
+from app.chat.stream_service import ensure_adk_session, load_model_config, stream_chat_response
 from app.core.config import Settings
 from app.db.models import Conversation, Message, MessageArtifact, User, UserModelPreference
 from app.db.session import AsyncSessionLocal
@@ -100,18 +101,18 @@ async def test_stream_chat_returns_sse_and_records_messages(authenticated_client
 
 
 @pytest.mark.asyncio
-async def test_stream_chat_uses_routed_model_once_in_adk_mode(monkeypatch: pytest.MonkeyPatch):
+async def test_stream_chat_uses_single_agent_team_entrypoint_in_adk_mode(monkeypatch: pytest.MonkeyPatch):
     async def fake_ensure_adk_session(*_: object, **__: object) -> None:
         return None
 
-    captured_model_names: list[str] = []
+    captured_model_configs: list[WebAssistantModelConfig] = []
 
     class StubRunner:
         async def run_async(self, **_: object):
             yield StubEvent(text="生成完成", thought=False, partial=False, final=True, turn_complete=True)
 
-    def fake_create_runner(model_name: str, settings: Settings):
-        captured_model_names.append(model_name)
+    def fake_create_runner(model_config: WebAssistantModelConfig, settings: Settings):
+        captured_model_configs.append(model_config)
         return StubRunner()
 
     monkeypatch.setattr("app.chat.stream_service.ensure_adk_session", fake_ensure_adk_session)
@@ -153,7 +154,14 @@ async def test_stream_chat_uses_routed_model_once_in_adk_mode(monkeypatch: pytes
             )
         ]
 
-    assert captured_model_names == ["user-xiaohongshu-model"]
+    assert captured_model_configs == [
+        WebAssistantModelConfig(
+            conversation_model="user-conversation-model",
+            text_summary_model="user-text-model",
+            xiaohongshu_model="user-xiaohongshu-model",
+            short_video_script_model="user-short-video-script-model",
+        )
+    ]
     assert any(event["event"] == "done" for event in events)
 
 
@@ -418,11 +426,11 @@ async def test_ensure_adk_session_auto_creates_separate_database(monkeypatch: py
     ]
 
 
-def test_create_runner_uses_selected_model_name(monkeypatch: pytest.MonkeyPatch):
+def test_create_runner_uses_model_config(monkeypatch: pytest.MonkeyPatch):
     calls: dict[str, object] = {}
 
-    def fake_create_web_assistant(model_name: str):
-        calls["model_name"] = model_name
+    def fake_create_web_assistant(model_config: WebAssistantModelConfig):
+        calls["model_config"] = model_config
         return "agent"
 
     class StubRunner:
@@ -438,21 +446,47 @@ def test_create_runner_uses_selected_model_name(monkeypatch: pytest.MonkeyPatch)
         jwt_secret_key="x" * 32,
         database_url="sqlite+aiosqlite:///:memory:",
     )
+    model_config = WebAssistantModelConfig(
+        conversation_model="conversation-model",
+        text_summary_model="summary-model",
+        xiaohongshu_model="xiaohongshu-model",
+        short_video_script_model="video-model",
+    )
 
-    create_runner("conversation-model", settings)
+    create_runner(model_config, settings)
 
-    assert calls["model_name"] == "conversation-model"
+    assert calls["model_config"] == model_config
     assert calls["runner_kwargs"]["agent"] == "agent"
     assert calls["runner_kwargs"]["auto_create_session"] is False
 
 
+def test_create_web_assistant_builds_delegating_agent_team():
+    agent = create_web_assistant(
+        WebAssistantModelConfig(
+            conversation_model="conversation-model",
+            text_summary_model="summary-model",
+            xiaohongshu_model="xiaohongshu-model",
+            short_video_script_model="video-model",
+        )
+    )
+
+    sub_agent_names = {sub_agent.name for sub_agent in agent.sub_agents}
+    assert agent.name == "summarix_web_assistant"
+    assert sub_agent_names == {
+        "summary_expert",
+        "visual_context_expert",
+        "xiaohongshu_copy_expert",
+        "short_video_script_expert",
+    }
+    assert all(sub_agent.description for sub_agent in agent.sub_agents)
+
+
 @pytest.mark.asyncio
-async def test_choose_model_uses_user_preferences_and_defaults():
+async def test_load_model_config_uses_user_preferences_and_defaults():
     settings = Settings(
         jwt_secret_key="x" * 32,
         database_url="sqlite+aiosqlite:///:memory:",
         text_summary_model="default-text-model",
-        vision_analysis_model="default-vision-model",
         conversation_model="default-conversation-model",
         xiaohongshu_model="default-xiaohongshu-model",
         short_video_script_model="default-short-video-script-model",
@@ -467,7 +501,6 @@ async def test_choose_model_uses_user_preferences_and_defaults():
             UserModelPreference(
                 user_id=user.id,
                 text_summary_model="user-text-model",
-                vision_analysis_model="user-vision-model",
                 conversation_model="user-conversation-model",
                 xiaohongshu_model="user-xiaohongshu-model",
                 short_video_script_model=None,
@@ -475,39 +508,11 @@ async def test_choose_model_uses_user_preferences_and_defaults():
         )
         await session.commit()
 
-        summary_model = await choose_model(
-            session,
-            user.id,
-            ChatStreamRequest(message="请总结页面", context={"page_text": "网页正文"}, artifact_ids=[]),
-            settings,
-        )
-        vision_model = await choose_model(
-            session,
-            user.id,
-            ChatStreamRequest(message="请解释截图", context=None, artifact_ids=["artifact-id"]),
-            settings,
-        )
-        conversation_model = await choose_model(
-            session,
-            user.id,
-            ChatStreamRequest(message="你好", context=None, artifact_ids=[]),
-            settings,
-        )
-        xiaohongshu_model = await choose_model(
-            session,
-            user.id,
-            ChatStreamRequest(message="请改成小红书文案", context=None, artifact_ids=[]),
-            settings,
-        )
-        short_video_script_model = await choose_model(
-            session,
-            user.id,
-            ChatStreamRequest(message="请输出短视频脚本", context=None, artifact_ids=[]),
-            settings,
-        )
+        model_config = await load_model_config(session, user.id, settings)
 
-    assert summary_model == "user-text-model"
-    assert vision_model == "user-vision-model"
-    assert conversation_model == "user-conversation-model"
-    assert xiaohongshu_model == "user-xiaohongshu-model"
-    assert short_video_script_model == "default-short-video-script-model"
+    assert model_config == WebAssistantModelConfig(
+        conversation_model="user-conversation-model",
+        text_summary_model="user-text-model",
+        xiaohongshu_model="user-xiaohongshu-model",
+        short_video_script_model="default-short-video-script-model",
+    )

@@ -80,7 +80,6 @@ export type AdkEvent = {
 
 export type ModelSettings = {
   text_summary_model?: string | null;
-  vision_analysis_model?: string | null;
   conversation_model?: string | null;
   xiaohongshu_model?: string | null;
   short_video_script_model?: string | null;

@@ -49,7 +49,6 @@ class Settings(BaseSettings):
     chat_max_artifact_bytes: int = 8 * 1024 * 1024
     default_chat_model: str = "dashscope/qwen3.5-flash"
     text_summary_model: str | None = None
-    vision_analysis_model: str | None = None
     conversation_model: str | None = None
     xiaohongshu_model: str | None = None
     short_video_script_model: str | None = None
@@ -118,10 +117,6 @@ class Settings(BaseSettings):
     @property
     def effective_text_model(self) -> str:
         return self.text_summary_model or self.default_chat_model
-
-    @property
-    def effective_vision_model(self) -> str:
-        return self.vision_analysis_model or self.default_chat_model
 
     @property
     def effective_conversation_model(self) -> str:

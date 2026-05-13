@@ -7,6 +7,7 @@ async def test_get_and_update_model_settings(authenticated_client: AsyncClient):
     assert get_response.status_code == 200
     defaults = get_response.json()["defaults"]
     assert defaults["conversation_model"] == "dashscope/qwen3.5-flash"
+    assert "vision_analysis_model" not in defaults
     assert defaults["xiaohongshu_model"] == "dashscope/qwen3.5-flash"
     assert defaults["short_video_script_model"] == "dashscope/qwen3.5-flash"
 
@@ -14,7 +15,6 @@ async def test_get_and_update_model_settings(authenticated_client: AsyncClient):
         "/api/settings/models",
         json={
             "text_summary_model": "dashscope/qwen3.5-flash",
-            "vision_analysis_model": "dashscope/qwen3.5-flash",
             "conversation_model": "dashscope/qwen3.5-flash",
             "xiaohongshu_model": "dashscope/qwen-xhs",
             "short_video_script_model": "dashscope/qwen-video",
@@ -22,6 +22,6 @@ async def test_get_and_update_model_settings(authenticated_client: AsyncClient):
     )
     assert update_response.status_code == 200
     payload = update_response.json()
-    assert payload["vision_analysis_model"] == "dashscope/qwen3.5-flash"
+    assert "vision_analysis_model" not in payload
     assert payload["xiaohongshu_model"] == "dashscope/qwen-xhs"
     assert payload["short_video_script_model"] == "dashscope/qwen-video"

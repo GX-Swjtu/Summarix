@@ -104,7 +104,6 @@ class UserModelPreference(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     text_summary_model: Mapped[str | None] = mapped_column(String(120), nullable=True)
-    vision_analysis_model: Mapped[str | None] = mapped_column(String(120), nullable=True)
     conversation_model: Mapped[str | None] = mapped_column(String(120), nullable=True)
     xiaohongshu_model: Mapped[str | None] = mapped_column(String(120), nullable=True)
     short_video_script_model: Mapped[str | None] = mapped_column(String(120), nullable=True)

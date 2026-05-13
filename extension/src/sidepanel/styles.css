@@ -214,6 +214,16 @@ a {
   margin: 0;
 }
 
+.notice.warning {
+  border-color: #fedf89;
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.chat-warning {
+  flex: 0 0 auto;
+}
+
 .auth-shell {
   display: grid;
   align-content: start;
