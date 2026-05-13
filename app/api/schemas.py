@@ -109,6 +109,8 @@ class ModelSettingsRequest(BaseModel):
     text_summary_model: str | None = Field(default=None, max_length=120)
     vision_analysis_model: str | None = Field(default=None, max_length=120)
     conversation_model: str | None = Field(default=None, max_length=120)
+    xiaohongshu_model: str | None = Field(default=None, max_length=120)
+    short_video_script_model: str | None = Field(default=None, max_length=120)
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -116,6 +118,8 @@ class ModelSettingsRequest(BaseModel):
                 "text_summary_model": "dashscope/qwen3.5-flash",
                 "vision_analysis_model": "dashscope/qwen3.5-flash",
                 "conversation_model": "dashscope/qwen3.5-flash",
+                "xiaohongshu_model": "dashscope/qwen3.5-flash",
+                "short_video_script_model": "dashscope/qwen3.5-flash",
             }
         }
     )

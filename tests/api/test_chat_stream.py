@@ -11,7 +11,7 @@ from app.api.schemas import ChatStreamRequest
 from app.chat.runner import create_runner, get_adk_session_service
 from app.chat.stream_service import choose_model, ensure_adk_session, stream_chat_response
 from app.core.config import Settings
-from app.db.models import Conversation, Message, User, UserModelPreference
+from app.db.models import Conversation, Message, MessageArtifact, User, UserModelPreference
 from app.db.session import AsyncSessionLocal
 
 
@@ -100,6 +100,64 @@ async def test_stream_chat_returns_sse_and_records_messages(authenticated_client
 
 
 @pytest.mark.asyncio
+async def test_stream_chat_uses_routed_model_once_in_adk_mode(monkeypatch: pytest.MonkeyPatch):
+    async def fake_ensure_adk_session(*_: object, **__: object) -> None:
+        return None
+
+    captured_model_names: list[str] = []
+
+    class StubRunner:
+        async def run_async(self, **_: object):
+            yield StubEvent(text="生成完成", thought=False, partial=False, final=True, turn_complete=True)
+
+    def fake_create_runner(model_name: str, settings: Settings):
+        captured_model_names.append(model_name)
+        return StubRunner()
+
+    monkeypatch.setattr("app.chat.stream_service.ensure_adk_session", fake_ensure_adk_session)
+    monkeypatch.setattr("app.chat.stream_service.create_runner", fake_create_runner)
+
+    settings = Settings(
+        jwt_secret_key="x" * 32,
+        database_url="sqlite+aiosqlite:///:memory:",
+        chat_agent_mode="adk",
+        text_summary_model="default-text-model",
+        conversation_model="default-conversation-model",
+        xiaohongshu_model="default-xiaohongshu-model",
+        short_video_script_model="default-short-video-script-model",
+    )
+
+    async with AsyncSessionLocal() as session:
+        user = User(email="team-config@example.com", password_hash="hashed")
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+        session.add(
+            UserModelPreference(
+                user_id=user.id,
+                text_summary_model="user-text-model",
+                conversation_model="user-conversation-model",
+                xiaohongshu_model="user-xiaohongshu-model",
+                short_video_script_model="user-short-video-script-model",
+            )
+        )
+        await session.commit()
+
+        events = [
+            event
+            async for event in stream_chat_response(
+                session,
+                user.id,
+                ChatStreamRequest(message="请结合网页改成小红书文案", context={"page_text": "网页正文"}, artifact_ids=[]),
+                settings,
+            )
+        ]
+
+    assert captured_model_names == ["user-xiaohongshu-model"]
+    assert any(event["event"] == "done" for event in events)
+
+
+@pytest.mark.asyncio
 async def test_stream_chat_returns_sse_error_when_generation_fails(
     authenticated_client: AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -123,6 +181,63 @@ async def test_stream_chat_returns_sse_error_when_generation_fails(
     assert "AI 响应生成失败" in body
     assert "event: done" not in body
     assert "AI 响应生成失败" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_returns_generic_error_when_image_generation_fails(monkeypatch: pytest.MonkeyPatch):
+    async def fake_ensure_adk_session(*_: object, **__: object) -> None:
+        return None
+
+    async def fake_load_artifact_parts(*_: object, **__: object) -> list[object]:
+        return []
+
+    class FailingRunner:
+        async def run_async(self, **_: object):
+            raise RuntimeError("model does not support image input")
+            yield StubEvent(text="", thought=False, partial=False, final=False, turn_complete=False)
+
+    monkeypatch.setattr("app.chat.stream_service.ensure_adk_session", fake_ensure_adk_session)
+    monkeypatch.setattr("app.chat.stream_service.load_artifact_parts", fake_load_artifact_parts)
+    monkeypatch.setattr("app.chat.stream_service.create_runner", lambda *_: FailingRunner())
+
+    settings = Settings(
+        jwt_secret_key="x" * 32,
+        database_url="sqlite+aiosqlite:///:memory:",
+        chat_agent_mode="adk",
+    )
+
+    async with AsyncSessionLocal() as session:
+        user = User(email="image-warning@example.com", password_hash="hashed")
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+
+        artifact = MessageArtifact(
+            user_id=user.id,
+            filename="screen.png",
+            storage_filename="screen.png",
+            mime_type="image/png",
+            size_bytes=10,
+            version=0,
+            source="screenshot",
+        )
+        session.add(artifact)
+        await session.commit()
+        await session.refresh(artifact)
+
+        events = [
+            event
+            async for event in stream_chat_response(
+                session,
+                user.id,
+                ChatStreamRequest(message="请解释截图", context=None, artifact_ids=[artifact.id]),
+                settings,
+            )
+        ]
+
+    error_event = next(event for event in events if event["event"] == "error")
+    assert error_event["data"] == "AI 响应生成失败，请稍后重试。"
+    assert not any(event["event"] == "done" for event in events)
 
 
 @pytest.mark.asyncio
@@ -303,7 +418,7 @@ async def test_ensure_adk_session_auto_creates_separate_database(monkeypatch: py
     ]
 
 
-def test_create_runner_uses_configured_model_name(monkeypatch: pytest.MonkeyPatch):
+def test_create_runner_uses_selected_model_name(monkeypatch: pytest.MonkeyPatch):
     calls: dict[str, object] = {}
 
     def fake_create_web_assistant(model_name: str):
@@ -324,19 +439,23 @@ def test_create_runner_uses_configured_model_name(monkeypatch: pytest.MonkeyPatc
         database_url="sqlite+aiosqlite:///:memory:",
     )
 
-    create_runner("dashscope/qwen3.5-flash", settings)
+    create_runner("conversation-model", settings)
 
-    assert calls["model_name"] == "dashscope/qwen3.5-flash"
+    assert calls["model_name"] == "conversation-model"
+    assert calls["runner_kwargs"]["agent"] == "agent"
+    assert calls["runner_kwargs"]["auto_create_session"] is False
 
 
 @pytest.mark.asyncio
-async def test_choose_model_routes_artifacts_page_text_and_conversation():
+async def test_choose_model_uses_user_preferences_and_defaults():
     settings = Settings(
         jwt_secret_key="x" * 32,
         database_url="sqlite+aiosqlite:///:memory:",
         text_summary_model="default-text-model",
         vision_analysis_model="default-vision-model",
         conversation_model="default-conversation-model",
+        xiaohongshu_model="default-xiaohongshu-model",
+        short_video_script_model="default-short-video-script-model",
     )
 
     async with AsyncSessionLocal() as session:
@@ -350,26 +469,22 @@ async def test_choose_model_routes_artifacts_page_text_and_conversation():
                 text_summary_model="user-text-model",
                 vision_analysis_model="user-vision-model",
                 conversation_model="user-conversation-model",
+                xiaohongshu_model="user-xiaohongshu-model",
+                short_video_script_model=None,
             )
         )
         await session.commit()
 
-        artifact_model = await choose_model(
-            session,
-            user.id,
-            ChatStreamRequest(message="请解释这张截图", context=None, artifact_ids=["artifact-id"]),
-            settings,
-        )
-        page_text_model = await choose_model(
-            session,
-            user.id,
-            ChatStreamRequest(message="帮我看看这篇文章", context={"page_text": "网页正文"}, artifact_ids=[]),
-            settings,
-        )
         summary_model = await choose_model(
             session,
             user.id,
-            ChatStreamRequest(message="请总结一下", context=None, artifact_ids=[]),
+            ChatStreamRequest(message="请总结页面", context={"page_text": "网页正文"}, artifact_ids=[]),
+            settings,
+        )
+        vision_model = await choose_model(
+            session,
+            user.id,
+            ChatStreamRequest(message="请解释截图", context=None, artifact_ids=["artifact-id"]),
             settings,
         )
         conversation_model = await choose_model(
@@ -378,8 +493,21 @@ async def test_choose_model_routes_artifacts_page_text_and_conversation():
             ChatStreamRequest(message="你好", context=None, artifact_ids=[]),
             settings,
         )
+        xiaohongshu_model = await choose_model(
+            session,
+            user.id,
+            ChatStreamRequest(message="请改成小红书文案", context=None, artifact_ids=[]),
+            settings,
+        )
+        short_video_script_model = await choose_model(
+            session,
+            user.id,
+            ChatStreamRequest(message="请输出短视频脚本", context=None, artifact_ids=[]),
+            settings,
+        )
 
-    assert artifact_model == "user-vision-model"
-    assert page_text_model == "user-text-model"
     assert summary_model == "user-text-model"
+    assert vision_model == "user-vision-model"
     assert conversation_model == "user-conversation-model"
+    assert xiaohongshu_model == "user-xiaohongshu-model"
+    assert short_video_script_model == "default-short-video-script-model"

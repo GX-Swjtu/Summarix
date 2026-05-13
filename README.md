@@ -1,6 +1,6 @@
 # Summarix
 
-Summarix 是一个基于 Chromium Side Panel 的 AI 网页总结插件，配套 FastAPI 后端。插件负责登录、网页正文提取、截图上传、流式聊天、历史查看和模型设置；后端负责用户认证、PostgreSQL 数据存储、ADK agent 调用、LiteLLM 模型切换和 SSE 流式响应。
+Summarix 是一个基于 Chromium Side Panel 的 AI 网页总结插件，配套 FastAPI 后端。插件负责登录、网页正文提取、截图上传、流式聊天、历史查看、模型设置，以及把网页主体文章快捷转换为小红书文案和短视频脚本；后端负责用户认证、PostgreSQL 数据存储、ADK agent 调用、LiteLLM 模型切换和 SSE 流式响应。
 
 ## 项目结构
 
@@ -45,6 +45,10 @@ uv run --env-file .env main.py
 
 LiteLLM 模型请直接使用 `provider/model` 形式，例如 `dashscope/qwen3.5-flash` 或 `dashscope/qwen3.5-flash`。后端不会再自动补全 provider。
 
+模型可按任务分别配置：`TEXT_SUMMARY_MODEL` 用于网页总结，`VISION_ANALYSIS_MODEL` 用于截图分析，`CONVERSATION_MODEL` 用于通用对话，`XIAOHONGSHU_MODEL` 用于小红书文案，`SHORT_VIDEO_SCRIPT_MODEL` 用于短视频脚本。用户也可以在 Side Panel 设置页覆盖这些模型。
+
+当前快捷改写链路会优先命中小红书文案模型和短视频脚本模型；如果这类请求会同时携带截图，请确保 `XIAOHONGSHU_MODEL` 和 `SHORT_VIDEO_SCRIPT_MODEL` 指向支持 vision 输入的模型。
+
 ## 插件本地运行
 
 ```powershell
@@ -84,8 +88,8 @@ uv run pytest tests/api/test_auth.py tests/api/test_artifacts.py tests/api/test_
 
 仓库内置两个 GitHub Actions workflow：
 
-- PR 到 `main` 时运行 CI，包含后端 API 测试、后端 Docker 构建校验和插件构建。
-- 代码合入 `main` 且涉及 `extension/` 后，会自动构建插件并上传 zip 产物到 GitHub Actions artifact。
+- PR 到 `master` 时运行 CI，包含后端 API 测试、后端 Docker 构建校验和插件构建。
+- 代码合入 `master` 且涉及 `extension/` 后，会自动构建插件并上传 zip 产物到 GitHub Actions artifact。
 - 推送版本标签（例如 `v0.1.0`）时，会重新构建插件并把 zip 附加到对应的 GitHub Release。
 
 插件发布标签必须与 `extension/package.json` 中的 `version` 一致，否则发布 workflow 会失败，避免错发版本。

@@ -51,6 +51,8 @@ class Settings(BaseSettings):
     text_summary_model: str | None = None
     vision_analysis_model: str | None = None
     conversation_model: str | None = None
+    xiaohongshu_model: str | None = None
+    short_video_script_model: str | None = None
     adk_database_url: str | None = None
 
     @field_validator("cors_allow_origins", "browser_extension_origins", mode="before")
@@ -124,6 +126,14 @@ class Settings(BaseSettings):
     @property
     def effective_conversation_model(self) -> str:
         return self.conversation_model or self.default_chat_model
+
+    @property
+    def effective_xiaohongshu_model(self) -> str:
+        return self.xiaohongshu_model or self.default_chat_model
+
+    @property
+    def effective_short_video_script_model(self) -> str:
+        return self.short_video_script_model or self.default_chat_model
 
 
 @lru_cache

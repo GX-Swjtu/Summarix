@@ -106,6 +106,8 @@ class UserModelPreference(Base):
     text_summary_model: Mapped[str | None] = mapped_column(String(120), nullable=True)
     vision_analysis_model: Mapped[str | None] = mapped_column(String(120), nullable=True)
     conversation_model: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    xiaohongshu_model: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    short_video_script_model: Mapped[str | None] = mapped_column(String(120), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
 

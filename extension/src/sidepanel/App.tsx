@@ -116,6 +116,18 @@ const QUICK_ACTIONS: QuickAction[] = [
     needsPage: true
   },
   {
+    label: "小红书文案",
+    prompt: "请将当前网页主体文章转换为小红书文案，严格使用：爆点标题、开场引子、正文、标签、互动引导。",
+    icon: MessageSquare,
+    needsPage: true
+  },
+  {
+    label: "短视频脚本",
+    prompt: "请将当前网页主体文章转换为短视频脚本，严格使用：选题标题、3 秒钩子、分镜表、结尾行动引导。",
+    icon: FileText,
+    needsPage: true
+  },
+  {
     label: "继续追问",
     prompt: "请基于我们已有上下文，给我 3 个最值得继续追问的问题，并说明它们能帮助我澄清什么。",
     icon: Wand2
@@ -1079,7 +1091,9 @@ function SettingsView({ setError }: { setError: (value: string | null) => void }
       ...value,
       text_summary_model: null,
       vision_analysis_model: null,
-      conversation_model: null
+      conversation_model: null,
+      xiaohongshu_model: null,
+      short_video_script_model: null
     });
   }
 
@@ -1124,7 +1138,7 @@ function SettingsView({ setError }: { setError: (value: string | null) => void }
         <div className="section-heading">
           <div>
             <strong>模型</strong>
-            <span>留空时使用后端默认值，带截图的问题优先走视觉模型。</span>
+            <span>留空时使用后端默认值；快捷文案和脚本任务会优先走对应模型，若会结合截图改写，请确保对应模型支持 vision 输入。</span>
           </div>
           <button type="button" onClick={resetModels} disabled={!models}><RotateCcw size={15} />默认</button>
         </div>
@@ -1139,6 +1153,14 @@ function SettingsView({ setError }: { setError: (value: string | null) => void }
         <label>
           对话模型
           <input value={models?.conversation_model || ""} placeholder={models?.defaults.conversation_model} onChange={(event) => setModels((value) => value && { ...value, conversation_model: event.target.value })} />
+        </label>
+        <label>
+          小红书文案模型
+          <input value={models?.xiaohongshu_model || ""} placeholder={models?.defaults.xiaohongshu_model} onChange={(event) => setModels((value) => value && { ...value, xiaohongshu_model: event.target.value })} />
+        </label>
+        <label>
+          短视频脚本模型
+          <input value={models?.short_video_script_model || ""} placeholder={models?.defaults.short_video_script_model} onChange={(event) => setModels((value) => value && { ...value, short_video_script_model: event.target.value })} />
         </label>
       </div>
 

@@ -3,7 +3,7 @@ name: Extension Release
 on:
   push:
     branches:
-      - main
+      - master
     tags:
       - 'v*'
     paths:
@@ -80,7 +80,7 @@ jobs:
           echo "path=${archive_path}" >> "$GITHUB_OUTPUT"
 
       - name: 上传主分支插件产物
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/master'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.package.outputs.name }}
