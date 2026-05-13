@@ -88,13 +88,13 @@ uv run pytest tests/api/test_auth.py tests/api/test_artifacts.py tests/api/test_
 
 仓库内置两个 GitHub Actions workflow：
 
-- PR 到 `master` 时运行 CI，包含后端 API 测试、后端 Docker 构建校验和插件构建。
-- 代码合入 `master` 且涉及 `extension/` 后，会自动构建插件并上传 zip 产物到 GitHub Actions artifact。
-- 推送版本标签（例如 `v0.1.0`）时，会重新构建插件并把 zip 附加到对应的 GitHub Release。
+- PR 到 `master` 或直接推送到 `master` 时运行 CI，包含后端 API 测试、后端 Docker 构建校验和插件构建。
+- 代码推送到 `master` 后，会自动把当前插件构建结果打包成 zip 并上传到 GitHub Actions artifact，方便验收主分支最新产物。
+- 推送版本标签（例如 `v0.1.0`）时，会先运行完整 Python 测试集 `uv run pytest tests/`，测试通过后再重新构建插件、推送后端 Docker 镜像，并创建对应的 GitHub Release。
 
-插件发布标签必须与 `extension/package.json` 中的 `version` 一致，否则发布 workflow 会失败，避免错发版本。
+发布标签必须与 `extension/package.json` 中的 `version` 一致，否则发布 workflow 会失败，避免错发版本。
 
-当前后端 Docker 仅在 CI 中执行构建校验，不做镜像推送或自动部署；如果后续需要发布后端镜像，可以在现有 workflow 基础上继续扩展。
+Release workflow 会把后端镜像推送到 `ghcr.io/<仓库所有者小写>/summarix-backend:vX.Y.Z` 和 `ghcr.io/<仓库所有者小写>/summarix-backend:latest`，同时把插件 zip 与镜像信息说明文件附加到 GitHub Release。
 
 ## Docker / Cloud Run 基线
 

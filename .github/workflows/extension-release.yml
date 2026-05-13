@@ -1,32 +1,56 @@
-name: Extension Release
+name: Release
 
 on:
   push:
-    branches:
-      - master
     tags:
-      - 'v*'
-    paths:
-      - 'extension/**'
-      - '.github/workflows/extension-release.yml'
+      - 'v*.*.*'
 
 permissions:
-  contents: read
+  contents: write
+  packages: write
 
 concurrency:
-  group: extension-release-${{ github.ref }}
+  group: release-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  package-extension:
-    name: 打包插件产物
+  publish-release:
+    name: 发布版本
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    env:
+      DATABASE_URL: 'sqlite+aiosqlite:///:memory:'
+      DATABASE_AUTO_CREATE_TABLES: 'false'
+      JWT_SECRET_KEY: test-secret-with-at-least-thirty-two-bytes
+      CHAT_AGENT_MODE: mock
+      CHAT_ARTIFACT_ROOT: .data/test-artifacts
 
     steps:
       - name: 拉取代码
         uses: actions/checkout@v4
+
+      - name: 校验发布标签格式
+        shell: bash
+        run: |
+          if [[ ! "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::发布标签必须使用 v.x.x 格式"
+            exit 1
+          fi
+
+      - name: 安装 uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: 同步后端依赖
+        run: uv sync --frozen --dev
+
+      - name: 运行完整测试
+        run: uv run pytest tests/
 
       - name: 安装 Node.js
         uses: actions/setup-node@v4
@@ -48,7 +72,6 @@ jobs:
           echo "value=${version}" >> "$GITHUB_OUTPUT"
 
       - name: 校验标签与插件版本一致
-        if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
           expected_tag="v${{ steps.version.outputs.value }}"
@@ -66,32 +89,66 @@ jobs:
         id: package
         shell: bash
         run: |
-          version="${{ steps.version.outputs.value }}"
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            archive_name="summarix-extension-${GITHUB_REF_NAME}.zip"
-          else
-            short_sha="${GITHUB_SHA::7}"
-            archive_name="summarix-extension-v${version}-${short_sha}.zip"
-          fi
+          archive_name="summarix-extension-${GITHUB_REF_NAME}.zip"
           archive_path="${RUNNER_TEMP}/${archive_name}"
           cd extension/dist
           zip -rq "$archive_path" .
           echo "name=${archive_name}" >> "$GITHUB_OUTPUT"
           echo "path=${archive_path}" >> "$GITHUB_OUTPUT"
 
-      - name: 上传主分支插件产物
-        if: github.ref == 'refs/heads/master'
-        uses: actions/upload-artifact@v4
+      - name: 登录 GHCR
+        uses: docker/login-action@v3
         with:
-          name: ${{ steps.package.outputs.name }}
-          path: ${{ steps.package.outputs.path }}
-          if-no-files-found: error
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 创建或更新 Release
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: 生成镜像标签
+        id: image
+        shell: bash
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          image_name="ghcr.io/${owner}/summarix-backend"
+          echo "name=${image_name}" >> "$GITHUB_OUTPUT"
+          echo "version_tag=${image_name}:${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          echo "latest_tag=${image_name}:latest" >> "$GITHUB_OUTPUT"
+
+      - name: 启用 Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 构建并推送后端镜像
+        id: docker
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ steps.image.outputs.version_tag }}
+            ${{ steps.image.outputs.latest_tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: 生成发布说明附件
+        id: release_meta
+        shell: bash
+        run: |
+          metadata_path="${RUNNER_TEMP}/summarix-release-${GITHUB_REF_NAME}.txt"
+          {
+            echo "插件压缩包: ${{ steps.package.outputs.name }}"
+            echo "后端镜像:"
+            echo "- ${{ steps.image.outputs.version_tag }}"
+            echo "- ${{ steps.image.outputs.latest_tag }}"
+            echo "镜像摘要: ${{ steps.docker.outputs.digest }}"
+          } > "$metadata_path"
+          echo "path=${metadata_path}" >> "$GITHUB_OUTPUT"
+
+      - name: 创建 Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          files: ${{ steps.package.outputs.path }}
+          files: |
+            ${{ steps.package.outputs.path }}
+            ${{ steps.release_meta.outputs.path }}
           generate_release_notes: true
           fail_on_unmatched_files: true

@@ -4,6 +4,9 @@ on:
   pull_request:
     branches:
       - master
+  push:
+    branches:
+      - master
 
 permissions:
   contents: read
@@ -87,3 +90,24 @@ jobs:
 
       - name: 构建插件
         run: npm run build
+
+      - name: 打包主分支插件产物
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        id: package
+        shell: bash
+        run: |
+          short_sha="${GITHUB_SHA::7}"
+          archive_name="summarix-extension-master-${short_sha}.zip"
+          archive_path="${RUNNER_TEMP}/${archive_name}"
+          cd dist
+          zip -rq "$archive_path" .
+          echo "name=${archive_name}" >> "$GITHUB_OUTPUT"
+          echo "path=${archive_path}" >> "$GITHUB_OUTPUT"
+
+      - name: 上传主分支插件产物
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: ${{ steps.package.outputs.path }}
+          if-no-files-found: error
