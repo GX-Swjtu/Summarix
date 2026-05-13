@@ -174,7 +174,7 @@ export async function streamChat(options: {
   context?: PageContext | null;
   artifactIds?: string[];
   signal?: AbortSignal;
-  onConversation: (payload: { id: string; user_message_id?: string }) => void;
+  onConversation: (payload: { id: string; user_message_id?: string; reference_artifacts?: Artifact[] }) => void;
   onAdkEvent: (event: AdkEvent) => void;
   onPersisted?: (payload: { assistant_message_id?: string }) => void;
 }): Promise<void> {
@@ -210,7 +210,7 @@ export async function streamChat(options: {
       .join("\n");
 
     if (event === "conversation") {
-      const payload = JSON.parse(data) as { id: string; user_message_id?: string };
+      const payload = JSON.parse(data) as { id: string; user_message_id?: string; reference_artifacts?: Artifact[] };
       options.onConversation(payload);
     }
     if (event === "adk_event") options.onAdkEvent(JSON.parse(data) as AdkEvent);

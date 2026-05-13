@@ -64,6 +64,7 @@ async def upload_artifact(
         mime_type=artifact.mime_type,
         size_bytes=artifact.size_bytes,
         version=artifact.version,
+        source=artifact.source,
     )
 
 

@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas import ChatStreamRequest
 from app.chat.agent_factory import WebAssistantModelConfig
-from app.chat.artifacts import get_artifact_service
+from app.chat.artifacts import get_artifact_service, save_page_text_artifact
 from app.chat.runner import create_runner, get_adk_session_service
 from app.core.config import Settings, get_settings
 from app.db.init import ensure_database_exists
@@ -32,6 +32,7 @@ IMAGE_UNSUPPORTED_ERROR_PATTERNS = (
     "vision is not supported",
     "multimodal",
 )
+PAGE_TEXT_PROMPT_LIMIT = 30000
 
 async def ensure_adk_session(user_id: str, conversation: Conversation, settings: Settings) -> None:
     if settings.chat_agent_mode != "adk":
@@ -128,7 +129,7 @@ def build_prompt(request: ChatStreamRequest, artifacts: Sequence[MessageArtifact
             lines.append(f"- 正文长度：{len(request.context.page_text)} 字符")
             lines.append("")
             lines.append("### 网页正文")
-            lines.append(request.context.page_text[:30000])
+            lines.append(request.context.page_text[:PAGE_TEXT_PROMPT_LIMIT])
         if not request.context.page_title and not request.context.page_url and not request.context.page_text:
             lines.append("- 未提供网页正文、标题或 URL。")
     else:
@@ -205,6 +206,34 @@ def serialize_adk_event(event: object) -> str:
     return json.dumps(event, ensure_ascii=False)
 
 
+def get_event_invocation_id(event: object) -> str | None:
+    invocation_id = getattr(event, "invocation_id", None) or getattr(event, "invocationId", None)
+    return str(invocation_id) if invocation_id else None
+
+
+def serialize_artifact_payload(artifact: MessageArtifact) -> dict[str, object]:
+    return {
+        "id": artifact.id,
+        "filename": artifact.filename,
+        "mime_type": artifact.mime_type,
+        "size_bytes": artifact.size_bytes,
+        "version": artifact.version,
+        "source": artifact.source,
+        "page_url": artifact.page_url,
+        "page_title": artifact.page_title,
+        "text_excerpt": artifact.text_excerpt,
+        "text_length": artifact.text_length,
+        "content_hash": artifact.content_hash,
+        "adk_invocation_id": artifact.adk_invocation_id,
+    }
+
+
+def has_reference_context(request: ChatStreamRequest) -> bool:
+    if not request.context:
+        return False
+    return bool(request.context.page_title or request.context.page_url or request.context.page_text)
+
+
 def mock_adk_event(text: str) -> dict[str, object]:
     return {
         "author": "summarix_web_assistant",
@@ -234,18 +263,46 @@ async def stream_chat_response(
     user_message = Message(conversation_id=conversation.id, role="user", content=request.message)
     session.add(user_message)
     await session.flush()
+    reference_artifacts: list[MessageArtifact] = []
+    if has_reference_context(request) and request.context:
+        page_text = request.context.page_text[:PAGE_TEXT_PROMPT_LIMIT] if request.context.page_text else None
+        reference_artifacts.append(
+            await save_page_text_artifact(
+                session=session,
+                user_id=user_id,
+                conversation_id=conversation.id,
+                message_id=user_message.id,
+                page_title=request.context.page_title,
+                page_url=request.context.page_url,
+                page_text=page_text,
+                original_text_length=len(request.context.page_text) if request.context.page_text is not None else None,
+                settings=settings,
+            )
+        )
+        if request.context.page_url and not conversation.page_url:
+            conversation.page_url = request.context.page_url
+        if request.context.page_title and not conversation.page_title:
+            conversation.page_title = request.context.page_title
     for artifact in artifacts:
         artifact.conversation_id = conversation.id
         artifact.message_id = user_message.id
     await session.commit()
     yield {
         "event": "conversation",
-        "data": json.dumps({"id": conversation.id, "user_message_id": user_message.id}, ensure_ascii=False),
+        "data": json.dumps(
+            {
+                "id": conversation.id,
+                "user_message_id": user_message.id,
+                "reference_artifacts": [serialize_artifact_payload(artifact) for artifact in reference_artifacts],
+            },
+            ensure_ascii=False,
+        ),
     }
 
     partial_response = ""
     final_response = ""
     thought_fallback_response = ""
+    adk_invocation_id: str | None = None
     try:
         if settings.chat_agent_mode == "mock":
             final_response = build_mock_response(prompt)
@@ -260,6 +317,8 @@ async def stream_chat_response(
                 new_message=types.Content(role="user", parts=message_parts),
                 run_config=RunConfig(streaming_mode=StreamingMode.SSE),
             ):
+                if adk_invocation_id is None:
+                    adk_invocation_id = get_event_invocation_id(event)
                 event_id = getattr(event, "id", None)
                 payload = {"event": "adk_event", "data": serialize_adk_event(event)}
                 if event_id:
@@ -288,10 +347,24 @@ async def stream_chat_response(
 
     full_response = final_response or partial_response or thought_fallback_response
     if not full_response:
+        if adk_invocation_id:
+            user_message.adk_invocation_id = adk_invocation_id
+            for artifact in reference_artifacts:
+                artifact.adk_invocation_id = adk_invocation_id
+            await session.commit()
         yield {"event": "done", "data": ""}
         return
 
-    assistant_message = Message(conversation_id=conversation.id, role="assistant", content=full_response)
+    if adk_invocation_id:
+        user_message.adk_invocation_id = adk_invocation_id
+        for artifact in reference_artifacts:
+            artifact.adk_invocation_id = adk_invocation_id
+    assistant_message = Message(
+        conversation_id=conversation.id,
+        role="assistant",
+        content=full_response,
+        adk_invocation_id=adk_invocation_id,
+    )
     session.add(assistant_message)
     await session.commit()
     yield {"event": "persisted", "data": json.dumps({"assistant_message_id": assistant_message.id}, ensure_ascii=False)}

@@ -16,6 +16,13 @@ export type Artifact = {
   mime_type: string;
   size_bytes: number;
   version: number;
+  source?: "screenshot" | "page_text" | "selection" | "upload" | string;
+  page_url?: string | null;
+  page_title?: string | null;
+  text_excerpt?: string | null;
+  text_length?: number | null;
+  content_hash?: string | null;
+  adk_invocation_id?: string | null;
 };
 
 export type MessageAttachment = Artifact & {
@@ -26,6 +33,7 @@ export type Message = {
   id: string;
   role: "user" | "assistant" | string;
   content: string;
+  adk_invocation_id?: string | null;
   created_at: string;
   artifacts?: Artifact[];
 };

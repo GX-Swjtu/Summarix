@@ -177,6 +177,52 @@ function pageLengthText(page: ExtractedPage): string {
   return `${Math.max(1, Math.round(page.text.length / 100) / 10)}k 字`;
 }
 
+function formatReferenceLength(length?: number | null): string {
+  if (!length) return "已记录页面信息";
+  if (length >= 1000) return `${Math.max(1, Math.round(length / 100) / 10)}k 字`;
+  return `${length} 字`;
+}
+
+function getReferenceSource(url?: string | null): string {
+  if (!url) return "网页参考";
+  try {
+    return new URL(url).hostname || url;
+  } catch {
+    return url;
+  }
+}
+
+function getReferenceTitle(artifact: MessageAttachment | Artifact): string {
+  return artifact.page_title || artifact.filename.replace(/\.txt$/i, "") || getReferenceSource(artifact.page_url) || "当前网页";
+}
+
+function makePageTextExcerpt(text: string, limit = 120): string | null {
+  const excerpt = text.replace(/\s+/g, " ").trim();
+  if (!excerpt) return null;
+  return excerpt.length > limit ? `${excerpt.slice(0, limit).trim()}...` : excerpt;
+}
+
+function makePageReferenceAttachment(page: ExtractedPage): MessageAttachment {
+  const title = page.title || getReferenceSource(page.url) || "当前网页";
+  return {
+    id: `page-${makeLocalId()}`,
+    filename: `${title}.txt`,
+    mime_type: "text/plain; charset=utf-8",
+    size_bytes: new TextEncoder().encode(page.text || title).length,
+    version: 0,
+    source: "page_text",
+    page_url: page.url,
+    page_title: title,
+    text_excerpt: makePageTextExcerpt(page.text),
+    text_length: page.text.length
+  };
+}
+
+function mergeReferenceArtifacts(current: MessageAttachment[] = [], references: Artifact[] = []): MessageAttachment[] {
+  if (references.length === 0) return current;
+  return [...references, ...current.filter((artifact) => artifact.source !== "page_text")];
+}
+
 function getNodeText(node: ReactNode): string {
   if (typeof node === "string" || typeof node === "number") return String(node);
   if (Array.isArray(node)) return node.map(getNodeText).join("");
@@ -650,20 +696,41 @@ function ChatView({
     const assistantId = makeLocalId();
     try {
       const draftSnapshot = [...drafts, ...extraDrafts];
+      const requestPage = contextOverride === undefined ? page : contextOverride;
+      const pageReference = requestPage ? makePageReferenceAttachment(requestPage) : null;
       const uploadedArtifacts = await uploadDrafts(draftSnapshot);
-      const userMessage: LocalMessage = { id: makeLocalId(), role: "user", content: text, artifacts: uploadedArtifacts };
+      const userMessage: LocalMessage = {
+        id: makeLocalId(),
+        role: "user",
+        content: text,
+        artifacts: [...(pageReference ? [pageReference] : []), ...uploadedArtifacts]
+      };
       setMessages((items) => [...items, userMessage, { id: assistantId, role: "assistant", content: "" }]);
       setInput("");
       setDrafts([]);
-      const requestPage = contextOverride === undefined ? page : contextOverride;
       await streamChat({
         conversationId,
         message: text,
         context: requestPage ? { page_url: requestPage.url, page_title: requestPage.title, page_text: requestPage.text } : null,
         artifactIds: uploadedArtifacts.map((artifact) => artifact.id),
         signal: controller.signal,
-        onConversation: (payload) => setConversationId(payload.id),
-        onAdkEvent: (event) => applyAdkEvent(assistantId, event)
+        onConversation: (payload) => {
+          setConversationId(payload.id);
+          setMessages((items) => items.map((item) => (
+            item.id === userMessage.id
+              ? {
+                ...item,
+                id: payload.user_message_id || item.id,
+                artifacts: mergeReferenceArtifacts(item.artifacts, payload.reference_artifacts || [])
+              }
+              : item
+          )));
+        },
+        onAdkEvent: (event) => applyAdkEvent(assistantId, event),
+        onPersisted: (payload) => {
+          if (!payload.assistant_message_id) return;
+          setMessages((items) => items.map((item) => (item.id === assistantId ? { ...item, id: payload.assistant_message_id || item.id } : item)));
+        }
       });
     } catch (error) {
       if (isAbortError(error)) {
@@ -853,7 +920,11 @@ function MessageBubble({
     <article className={`message ${roleClass}`}>
       {message.artifacts && message.artifacts.length > 0 && (
         <div className="message-attachments">
-          {message.artifacts.map((artifact) => <AttachmentPreview artifact={artifact} key={artifact.id} />)}
+          {message.artifacts.map((artifact) => (
+            artifact.source === "page_text"
+              ? <ReferencePagePreview artifact={artifact} key={artifact.id} />
+              : <AttachmentPreview artifact={artifact} key={artifact.id} />
+          ))}
         </div>
       )}
       <div className="message-text">
@@ -964,6 +1035,26 @@ function AttachmentPreview({ artifact }: { artifact: MessageAttachment | Artifac
       <figcaption title={artifact.filename}>{artifact.filename}</figcaption>
     </figure>
   );
+}
+
+function ReferencePagePreview({ artifact }: { artifact: MessageAttachment | Artifact }) {
+  const title = getReferenceTitle(artifact);
+  const source = getReferenceSource(artifact.page_url);
+  const content = (
+    <>
+      <div className="reference-icon"><Link size={15} /></div>
+      <div className="reference-copy">
+        <strong title={title}>{title}</strong>
+        <span title={artifact.page_url || source}>{source}</span>
+        {artifact.text_excerpt && <p title={artifact.text_excerpt}>{artifact.text_excerpt}</p>}
+        <small>{formatReferenceLength(artifact.text_length)}</small>
+      </div>
+    </>
+  );
+  if (artifact.page_url) {
+    return <a className="reference-preview" href={artifact.page_url} target="_blank" rel="noreferrer">{content}</a>;
+  }
+  return <div className="reference-preview">{content}</div>;
 }
 
 function HistoryView({

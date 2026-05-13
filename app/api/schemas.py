@@ -71,6 +71,13 @@ class ArtifactResponse(BaseModel):
     mime_type: str
     size_bytes: int
     version: int
+    source: str = "screenshot"
+    page_url: str | None = None
+    page_title: str | None = None
+    text_excerpt: str | None = None
+    text_length: int | None = None
+    content_hash: str | None = None
+    adk_invocation_id: str | None = None
 
 
 class MessagePublic(BaseModel):
@@ -79,6 +86,7 @@ class MessagePublic(BaseModel):
     id: str
     role: Literal["user", "assistant"] | str
     content: str
+    adk_invocation_id: str | None = None
     created_at: datetime
     artifacts: list[ArtifactResponse] = Field(default_factory=list)
 

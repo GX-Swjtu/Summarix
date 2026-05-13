@@ -13,9 +13,18 @@ async def test_history_list_and_detail(authenticated_client: AsyncClient):
     artifact = artifact_response.json()
 
     for index in range(3):
+        context = (
+            {
+                "page_url": "https://example.com/history-reference",
+                "page_title": "历史参考页面",
+                "page_text": "历史详情应保留这段网页正文作为本轮对话依据。",
+            }
+            if index == 1
+            else None
+        )
         stream_response = await authenticated_client.post(
             "/api/chat/stream",
-            json={"message": f"记录这次对话 {index}", "context": None, "artifact_ids": [artifact["id"]] if index == 0 else []},
+            json={"message": f"记录这次对话 {index}", "context": context, "artifact_ids": [artifact["id"]] if index == 0 else []},
         )
         assert stream_response.status_code == 200
 
@@ -45,3 +54,13 @@ async def test_history_list_and_detail(authenticated_client: AsyncClient):
     assert artifact_detail_response.status_code == 200
     artifact_detail = artifact_detail_response.json()
     assert artifact_detail["messages"][0]["artifacts"][0]["id"] == artifact["id"]
+
+    page_reference_conversation = next(item for item in [*page["items"], *next_page["items"]] if item["title"] == "历史参考页面")
+    page_reference_response = await authenticated_client.get(f"/api/history/{page_reference_conversation['id']}")
+    assert page_reference_response.status_code == 200
+    page_reference_detail = page_reference_response.json()
+    page_reference_artifact = page_reference_detail["messages"][0]["artifacts"][0]
+    assert page_reference_artifact["source"] == "page_text"
+    assert page_reference_artifact["page_url"] == "https://example.com/history-reference"
+    assert page_reference_artifact["page_title"] == "历史参考页面"
+    assert "历史详情应保留" in page_reference_artifact["text_excerpt"]

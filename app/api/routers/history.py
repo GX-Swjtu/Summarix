@@ -18,6 +18,13 @@ def artifact_response(artifact) -> ArtifactResponse:
         mime_type=artifact.mime_type,
         size_bytes=artifact.size_bytes,
         version=artifact.version,
+        source=artifact.source,
+        page_url=artifact.page_url,
+        page_title=artifact.page_title,
+        text_excerpt=artifact.text_excerpt,
+        text_length=artifact.text_length,
+        content_hash=artifact.content_hash,
+        adk_invocation_id=artifact.adk_invocation_id,
     )
 
 
@@ -72,6 +79,7 @@ async def get_history_detail(
                 id=message.id,
                 role=message.role,
                 content=message.content,
+                adk_invocation_id=message.adk_invocation_id,
                 created_at=message.created_at,
                 artifacts=[artifact_response(artifact) for artifact in message.artifacts],
             )

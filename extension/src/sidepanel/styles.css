@@ -728,6 +728,71 @@ textarea:focus {
   margin: 0;
 }
 
+.reference-preview {
+  display: grid;
+  flex: 0 0 240px;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 8px;
+  min-height: 84px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+  color: var(--text);
+  text-decoration: none;
+  transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
+}
+
+.reference-preview:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+}
+
+.reference-icon {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 1px solid #cce8e2;
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.reference-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.reference-copy strong,
+.reference-copy span,
+.reference-copy p {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reference-copy strong {
+  color: inherit;
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.reference-copy span,
+.reference-copy small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.reference-copy p {
+  margin: 1px 0 0;
+  color: var(--muted-strong);
+  font-size: 11px;
+  line-height: 1.25;
+}
+
 .image-chip img,
 .attachment-preview img,
 .image-placeholder {
@@ -750,6 +815,24 @@ textarea:focus {
 }
 
 .message.user .attachment-preview figcaption {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.message.user .reference-preview {
+  border-color: rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+}
+
+.message.user .reference-icon {
+  border-color: rgba(255, 255, 255, 0.24);
+  background: rgba(255, 255, 255, 0.16);
+  color: #ffffff;
+}
+
+.message.user .reference-copy span,
+.message.user .reference-copy small,
+.message.user .reference-copy p {
   color: rgba(255, 255, 255, 0.8);
 }
 

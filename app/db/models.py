@@ -72,6 +72,7 @@ class Message(Base):
     conversation_id: Mapped[str] = mapped_column(ForeignKey("conversations.id", ondelete="CASCADE"), index=True, nullable=False)
     role: Mapped[str] = mapped_column(String(30), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    adk_invocation_id: Mapped[str | None] = mapped_column(String(120), index=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
 
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
@@ -91,6 +92,12 @@ class MessageArtifact(Base):
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     source: Mapped[str] = mapped_column(String(40), nullable=False, default="screenshot")
+    page_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    page_title: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    text_excerpt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    text_length: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    adk_invocation_id: Mapped[str | None] = mapped_column(String(120), index=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
 
     conversation: Mapped[Conversation | None] = relationship(back_populates="artifacts")
