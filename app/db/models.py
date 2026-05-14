@@ -114,6 +114,12 @@ class UserModelPreference(Base):
     conversation_model: Mapped[str | None] = mapped_column(String(120), nullable=True)
     xiaohongshu_model: Mapped[str | None] = mapped_column(String(120), nullable=True)
     short_video_script_model: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    suggested_questions_model: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    text_summary_thinking_mode: Mapped[str] = mapped_column(String(20), nullable=False, default="default")
+    conversation_thinking_mode: Mapped[str] = mapped_column(String(20), nullable=False, default="default")
+    xiaohongshu_thinking_mode: Mapped[str] = mapped_column(String(20), nullable=False, default="default")
+    short_video_script_thinking_mode: Mapped[str] = mapped_column(String(20), nullable=False, default="default")
+    suggested_questions_thinking_mode: Mapped[str] = mapped_column(String(20), nullable=False, default="disabled")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
 

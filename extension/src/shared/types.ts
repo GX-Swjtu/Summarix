@@ -86,11 +86,23 @@ export type AdkEvent = {
   error_message?: string;
 };
 
+export type ThinkingMode = "default" | "enabled" | "disabled";
+
+export type SuggestedQuestionsPayload = {
+  questions: string[];
+};
+
 export type ModelSettings = {
   text_summary_model?: string | null;
   conversation_model?: string | null;
   xiaohongshu_model?: string | null;
   short_video_script_model?: string | null;
+  suggested_questions_model?: string | null;
+  text_summary_thinking_mode: ThinkingMode;
+  conversation_thinking_mode: ThinkingMode;
+  xiaohongshu_thinking_mode: ThinkingMode;
+  short_video_script_thinking_mode: ThinkingMode;
+  suggested_questions_thinking_mode: ThinkingMode;
   defaults: Record<string, string>;
 };
 

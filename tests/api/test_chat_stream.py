@@ -8,7 +8,7 @@ from google.adk.errors.already_exists_error import AlreadyExistsError
 from google.adk.agents.run_config import StreamingMode
 
 from app.api.schemas import ChatStreamRequest
-from app.chat.agent_factory import WebAssistantModelConfig, create_web_assistant
+from app.chat.agent_factory import WebAssistantModelConfig, build_litellm_kwargs, create_web_assistant
 from app.chat.runner import create_runner, get_adk_session_service
 from app.chat.stream_service import ensure_adk_session, load_model_config, stream_chat_response
 from app.core.config import Settings
@@ -74,6 +74,23 @@ class StubEvent:
         )
 
 
+def make_model_config(**overrides: str) -> WebAssistantModelConfig:
+    values = {
+        "conversation_model": "conversation-model",
+        "text_summary_model": "summary-model",
+        "xiaohongshu_model": "xiaohongshu-model",
+        "short_video_script_model": "video-model",
+        "suggested_questions_model": "suggestion-model",
+        "conversation_thinking_mode": "default",
+        "text_summary_thinking_mode": "default",
+        "xiaohongshu_thinking_mode": "default",
+        "short_video_script_thinking_mode": "default",
+        "suggested_questions_thinking_mode": "default",
+    }
+    values.update(overrides)
+    return WebAssistantModelConfig(**values)
+
+
 @pytest.mark.asyncio
 async def test_stream_chat_returns_sse_and_records_messages(authenticated_client: AsyncClient):
     response = await authenticated_client.post(
@@ -96,6 +113,7 @@ async def test_stream_chat_returns_sse_and_records_messages(authenticated_client
     assert "event: persisted" in body
     assert "event: done" in body
     assert "event: delta" not in body
+    assert "event: suggested_questions" not in body
 
     events = parse_sse_events(body)
     conversation = next(event for event in events if event["event"] == "conversation")
@@ -108,6 +126,60 @@ async def test_stream_chat_returns_sse_and_records_messages(authenticated_client
     assert adk_payload["turnComplete"] is True
     persisted = next(event for event in events if event["event"] == "persisted")
     assert json.loads(persisted["data"])["assistant_message_id"]
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_emits_suggested_questions_when_requested(authenticated_client: AsyncClient):
+    response = await authenticated_client.post(
+        "/api/chat/stream",
+        json={
+            "message": "请总结页面",
+            "context": {
+                "page_url": "https://example.com",
+                "page_title": "示例页面",
+                "page_text": "这是一个用于建议问题测试的页面正文。",
+            },
+            "artifact_ids": [],
+            "suggested_questions": True,
+        },
+    )
+
+    assert response.status_code == 200
+    events = parse_sse_events(response.text)
+    event_names = [event["event"] for event in events]
+    assert event_names.index("persisted") < event_names.index("suggested_questions") < event_names.index("done")
+    payload = json.loads(next(event for event in events if event["event"] == "suggested_questions")["data"])
+    assert payload["questions"] == [
+        "这页内容最值得继续确认的关键结论是什么？",
+        "有哪些风险、限制或待办需要优先处理？",
+        "如果要把这些信息用于实际决策，下一步应该先问什么？",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_stream_suggested_questions_endpoint_returns_clickable_questions(authenticated_client: AsyncClient):
+    chat_response = await authenticated_client.post(
+        "/api/chat/stream",
+        json={"message": "先建立一个会话", "context": None, "artifact_ids": []},
+    )
+    assert chat_response.status_code == 200
+    conversation_id = json.loads(
+        next(event for event in parse_sse_events(chat_response.text) if event["event"] == "conversation")["data"]
+    )["id"]
+
+    response = await authenticated_client.post(
+        "/api/chat/suggestions/stream",
+        json={"conversation_id": conversation_id, "count": 2},
+    )
+
+    assert response.status_code == 200
+    events = parse_sse_events(response.text)
+    assert [event["event"] for event in events] == ["suggested_questions", "done"]
+    payload = json.loads(events[0]["data"])
+    assert payload["questions"] == [
+        "这页内容最值得继续确认的关键结论是什么？",
+        "有哪些风险、限制或待办需要优先处理？",
+    ]
 
 
 @pytest.mark.asyncio
@@ -249,6 +321,12 @@ async def test_stream_chat_uses_single_agent_team_entrypoint_in_adk_mode(monkeyp
                 conversation_model="user-conversation-model",
                 xiaohongshu_model="user-xiaohongshu-model",
                 short_video_script_model="user-short-video-script-model",
+                suggested_questions_model="user-suggestion-model",
+                conversation_thinking_mode="enabled",
+                text_summary_thinking_mode="disabled",
+                xiaohongshu_thinking_mode="default",
+                short_video_script_thinking_mode="enabled",
+                suggested_questions_thinking_mode="disabled",
             )
         )
         await session.commit()
@@ -264,11 +342,17 @@ async def test_stream_chat_uses_single_agent_team_entrypoint_in_adk_mode(monkeyp
         ]
 
     assert captured_model_configs == [
-        WebAssistantModelConfig(
+        make_model_config(
             conversation_model="user-conversation-model",
             text_summary_model="user-text-model",
             xiaohongshu_model="user-xiaohongshu-model",
             short_video_script_model="user-short-video-script-model",
+            suggested_questions_model="user-suggestion-model",
+            conversation_thinking_mode="enabled",
+            text_summary_thinking_mode="disabled",
+            xiaohongshu_thinking_mode="default",
+            short_video_script_thinking_mode="enabled",
+            suggested_questions_thinking_mode="disabled",
         )
     ]
     assert any(event["event"] == "done" for event in events)
@@ -665,7 +749,7 @@ def test_create_runner_uses_model_config(monkeypatch: pytest.MonkeyPatch):
         jwt_secret_key="x" * 32,
         database_url="sqlite+aiosqlite:///:memory:",
     )
-    model_config = WebAssistantModelConfig(
+    model_config = make_model_config(
         conversation_model="conversation-model",
         text_summary_model="summary-model",
         xiaohongshu_model="xiaohongshu-model",
@@ -679,9 +763,15 @@ def test_create_runner_uses_model_config(monkeypatch: pytest.MonkeyPatch):
     assert calls["runner_kwargs"]["auto_create_session"] is False
 
 
+def test_build_litellm_kwargs_respects_thinking_mode():
+    assert build_litellm_kwargs("default") == {}
+    assert build_litellm_kwargs("enabled") == {"extra_body": {"enable_thinking": True}}
+    assert build_litellm_kwargs("disabled") == {"extra_body": {"enable_thinking": False}}
+
+
 def test_create_web_assistant_builds_delegating_agent_team():
     agent = create_web_assistant(
-        WebAssistantModelConfig(
+        make_model_config(
             conversation_model="conversation-model",
             text_summary_model="summary-model",
             xiaohongshu_model="xiaohongshu-model",
@@ -707,6 +797,26 @@ def test_create_web_assistant_builds_delegating_agent_team():
     assert "不要再用“爆点标题”“开场引子”“正文”“标签”“互动引导”这类小节标题" in xiaohongshu_agent.instruction
 
 
+def test_create_web_assistant_applies_thinking_mode_to_litellm_models():
+    agent = create_web_assistant(
+        make_model_config(
+            conversation_thinking_mode="enabled",
+            text_summary_thinking_mode="disabled",
+            xiaohongshu_thinking_mode="default",
+            short_video_script_thinking_mode="enabled",
+        )
+    )
+
+    summary_agent = next(sub_agent for sub_agent in agent.sub_agents if sub_agent.name == "summary_expert")
+    xiaohongshu_agent = next(sub_agent for sub_agent in agent.sub_agents if sub_agent.name == "xiaohongshu_copy_expert")
+    video_agent = next(sub_agent for sub_agent in agent.sub_agents if sub_agent.name == "short_video_script_expert")
+
+    assert getattr(agent.model, "_additional_args") == {"extra_body": {"enable_thinking": True}}
+    assert getattr(summary_agent.model, "_additional_args") == {"extra_body": {"enable_thinking": False}}
+    assert getattr(xiaohongshu_agent.model, "_additional_args") == {}
+    assert getattr(video_agent.model, "_additional_args") == {"extra_body": {"enable_thinking": True}}
+
+
 @pytest.mark.asyncio
 async def test_load_model_config_uses_user_preferences_and_defaults():
     settings = Settings(
@@ -716,6 +826,12 @@ async def test_load_model_config_uses_user_preferences_and_defaults():
         conversation_model="default-conversation-model",
         xiaohongshu_model="default-xiaohongshu-model",
         short_video_script_model="default-short-video-script-model",
+        suggested_questions_model="default-suggestion-model",
+        text_summary_thinking_mode="enabled",
+        conversation_thinking_mode="disabled",
+        xiaohongshu_thinking_mode="default",
+        short_video_script_thinking_mode="enabled",
+        suggested_questions_thinking_mode="disabled",
     )
 
     async with AsyncSessionLocal() as session:
@@ -730,15 +846,25 @@ async def test_load_model_config_uses_user_preferences_and_defaults():
                 conversation_model="user-conversation-model",
                 xiaohongshu_model="user-xiaohongshu-model",
                 short_video_script_model=None,
+                suggested_questions_model="user-suggestion-model",
+                text_summary_thinking_mode="disabled",
+                xiaohongshu_thinking_mode="enabled",
+                suggested_questions_thinking_mode="default",
             )
         )
         await session.commit()
 
         model_config = await load_model_config(session, user.id, settings)
 
-    assert model_config == WebAssistantModelConfig(
+    assert model_config == make_model_config(
         conversation_model="user-conversation-model",
         text_summary_model="user-text-model",
         xiaohongshu_model="user-xiaohongshu-model",
         short_video_script_model="default-short-video-script-model",
+        suggested_questions_model="user-suggestion-model",
+        conversation_thinking_mode="default",
+        text_summary_thinking_mode="disabled",
+        xiaohongshu_thinking_mode="enabled",
+        short_video_script_thinking_mode="default",
+        suggested_questions_thinking_mode="default",
     )

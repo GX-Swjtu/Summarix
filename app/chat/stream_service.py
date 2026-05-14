@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import json
+import re
 from collections.abc import AsyncIterator, Sequence
 
 from google.adk.errors.already_exists_error import AlreadyExistsError
@@ -10,8 +11,8 @@ from google.genai import types
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.schemas import ChatStreamRequest
-from app.chat.agent_factory import WebAssistantModelConfig
+from app.api.schemas import ChatStreamRequest, SuggestedQuestionsStreamRequest
+from app.chat.agent_factory import WebAssistantModelConfig, build_litellm_kwargs
 from app.chat.artifacts import get_artifact_service, save_page_text_artifact
 from app.chat.runner import create_runner, get_adk_session_service
 from app.core.config import Settings, get_settings
@@ -33,6 +34,8 @@ IMAGE_UNSUPPORTED_ERROR_PATTERNS = (
     "multimodal",
 )
 PAGE_TEXT_PROMPT_LIMIT = 30000
+SUGGESTED_QUESTIONS_CONTEXT_LIMIT = 12000
+SUGGESTED_QUESTIONS_RECENT_MESSAGE_LIMIT = 8
 
 async def ensure_adk_session(user_id: str, conversation: Conversation, settings: Settings) -> None:
     if settings.chat_agent_mode != "adk":
@@ -88,6 +91,18 @@ async def load_model_config(session: AsyncSession, user_id: str, settings: Setti
         xiaohongshu_model=(preference.xiaohongshu_model if preference else None) or settings.effective_xiaohongshu_model,
         short_video_script_model=(preference.short_video_script_model if preference else None)
         or settings.effective_short_video_script_model,
+        suggested_questions_model=(preference.suggested_questions_model if preference else None)
+        or settings.effective_suggested_questions_model,
+        conversation_thinking_mode=(preference.conversation_thinking_mode if preference else None)
+        or settings.conversation_thinking_mode,
+        text_summary_thinking_mode=(preference.text_summary_thinking_mode if preference else None)
+        or settings.text_summary_thinking_mode,
+        xiaohongshu_thinking_mode=(preference.xiaohongshu_thinking_mode if preference else None)
+        or settings.xiaohongshu_thinking_mode,
+        short_video_script_thinking_mode=(preference.short_video_script_thinking_mode if preference else None)
+        or settings.short_video_script_thinking_mode,
+        suggested_questions_thinking_mode=(preference.suggested_questions_thinking_mode if preference else None)
+        or settings.suggested_questions_thinking_mode,
     )
 
 
@@ -257,6 +272,192 @@ def build_mock_response(prompt: str) -> str:
     return text
 
 
+def build_mock_suggested_questions(count: int) -> list[str]:
+    questions = [
+        "这页内容最值得继续确认的关键结论是什么？",
+        "有哪些风险、限制或待办需要优先处理？",
+        "如果要把这些信息用于实际决策，下一步应该先问什么？",
+        "当前信息里有哪些地方需要更多证据支撑？",
+        "可以把这页内容整理成适合分享的版本吗？",
+    ]
+    return questions[:count]
+
+
+def normalize_suggested_question(value: str) -> str | None:
+    text = re.sub(r"^[\s\-*>•·]*(?:\d+[\.)、]|[（(]?\d+[）)]|[A-Za-z][\.)])?\s*", "", value).strip()
+    text = text.strip('"“”`')
+    if not text:
+        return None
+    return text[:160]
+
+
+def parse_suggested_questions(raw_text: str, count: int) -> list[str]:
+    text = raw_text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*```$", "", text).strip()
+    candidates: list[str] = []
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            parsed = parsed.get("questions") or parsed.get("suggested_questions") or []
+        if isinstance(parsed, list):
+            for item in parsed:
+                if isinstance(item, str):
+                    candidates.append(item)
+                elif isinstance(item, dict):
+                    question = item.get("question") or item.get("text")
+                    if isinstance(question, str):
+                        candidates.append(question)
+    except json.JSONDecodeError:
+        candidates = []
+    if not candidates:
+        candidates = [line for line in text.splitlines() if line.strip()]
+
+    questions: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        question = normalize_suggested_question(candidate)
+        if not question or question in seen:
+            continue
+        seen.add(question)
+        questions.append(question)
+        if len(questions) >= count:
+            break
+    return questions
+
+
+def serialize_suggested_questions_payload(questions: Sequence[str]) -> str:
+    return json.dumps({"questions": list(questions)}, ensure_ascii=False)
+
+
+async def load_recent_messages(
+    session: AsyncSession,
+    conversation_id: str,
+    limit: int = SUGGESTED_QUESTIONS_RECENT_MESSAGE_LIMIT,
+) -> list[Message]:
+    result = await session.execute(
+        select(Message)
+        .where(Message.conversation_id == conversation_id)
+        .order_by(Message.created_at.desc())
+        .limit(limit)
+    )
+    return list(reversed(result.scalars().all()))
+
+
+def build_suggested_questions_prompt(conversation: Conversation, messages: Sequence[Message], count: int) -> str:
+    lines = [
+        "你是 Summarix 的下一步问题推荐器。",
+        f"请基于最近对话，生成 {count} 个用户下一步最值得直接点击提问的问题。",
+        "要求：问题必须具体、短、可直接发送；不要解释；不要编号；只输出 JSON 字符串数组。",
+        "不要重复已经问过的问题，不要编造网页中没有依据的事实。",
+        "",
+        "## 会话信息",
+        f"- 标题：{conversation.title}",
+    ]
+    if conversation.page_title:
+        lines.append(f"- 页面标题：{conversation.page_title}")
+    if conversation.page_url:
+        lines.append(f"- 页面 URL：{conversation.page_url}")
+    lines.extend(["", "## 最近对话"])
+    for message in messages:
+        role = "用户" if message.role == "user" else "助手"
+        content = message.content.replace("\n", " ").strip()
+        if content:
+            lines.append(f"{role}：{content[:1800]}")
+    return "\n".join(lines)[:SUGGESTED_QUESTIONS_CONTEXT_LIMIT]
+
+
+def extract_litellm_response_text(response: object) -> str:
+    choices = getattr(response, "choices", None)
+    if choices is None and isinstance(response, dict):
+        choices = response.get("choices")
+    if not choices:
+        return ""
+    choice = choices[0]
+    message = getattr(choice, "message", None)
+    if message is None and isinstance(choice, dict):
+        message = choice.get("message")
+    content = getattr(message, "content", None)
+    if content is None and isinstance(message, dict):
+        content = message.get("content")
+    if isinstance(content, list):
+        return "\n".join(str(item.get("text", item)) if isinstance(item, dict) else str(item) for item in content)
+    return str(content or "")
+
+
+async def call_suggested_questions_model(prompt: str, model_config: WebAssistantModelConfig) -> str:
+    from litellm import acompletion
+
+    response = await acompletion(
+        model=model_config.suggested_questions_model,
+        messages=[
+            {"role": "system", "content": "你只输出 JSON 字符串数组，不输出 Markdown 或解释。"},
+            {"role": "user", "content": prompt},
+        ],
+        **build_litellm_kwargs(model_config.suggested_questions_thinking_mode),
+    )
+    return extract_litellm_response_text(response)
+
+
+async def generate_suggested_questions(
+    session: AsyncSession,
+    user_id: str,
+    conversation: Conversation,
+    settings: Settings,
+    count: int = 3,
+) -> list[str]:
+    if settings.chat_agent_mode == "mock":
+        return build_mock_suggested_questions(count)
+    model_config = await load_model_config(session, user_id, settings)
+    messages = await load_recent_messages(session, conversation.id)
+    prompt = build_suggested_questions_prompt(conversation, messages, count)
+    raw_text = await call_suggested_questions_model(prompt, model_config)
+    questions = parse_suggested_questions(raw_text, count)
+    return questions or build_mock_suggested_questions(count)
+
+
+async def stream_suggested_questions_for_conversation(
+    session: AsyncSession,
+    user_id: str,
+    conversation: Conversation,
+    settings: Settings,
+    count: int = 3,
+) -> AsyncIterator[dict[str, str]]:
+    try:
+        questions = await generate_suggested_questions(session, user_id, conversation, settings, count)
+    except Exception:
+        logger.exception("下一步建议问题生成失败，user_id=%s conversation_id=%s", user_id, conversation.id)
+        questions = []
+    if questions:
+        yield {"event": "suggested_questions", "data": serialize_suggested_questions_payload(questions)}
+
+
+async def stream_suggested_questions_response(
+    session: AsyncSession,
+    user_id: str,
+    request: SuggestedQuestionsStreamRequest,
+    settings: Settings | None = None,
+) -> AsyncIterator[dict[str, str]]:
+    settings = settings or get_settings()
+    result = await session.execute(
+        select(Conversation).where(Conversation.id == request.conversation_id, Conversation.user_id == user_id)
+    )
+    conversation = result.scalar_one_or_none()
+    if conversation is None:
+        yield {"event": "error", "data": "会话不存在或无权访问"}
+        return
+    async for event in stream_suggested_questions_for_conversation(
+        session,
+        user_id,
+        conversation,
+        settings,
+        request.count,
+    ):
+        yield event
+    yield {"event": "done", "data": ""}
+
+
 async def stream_chat_response(
     session: AsyncSession,
     user_id: str,
@@ -375,4 +576,7 @@ async def stream_chat_response(
     session.add(assistant_message)
     await session.commit()
     yield {"event": "persisted", "data": json.dumps({"assistant_message_id": assistant_message.id}, ensure_ascii=False)}
+    if request.suggested_questions:
+        async for event in stream_suggested_questions_for_conversation(session, user_id, conversation, settings):
+            yield event
     yield {"event": "done", "data": assistant_message.id}

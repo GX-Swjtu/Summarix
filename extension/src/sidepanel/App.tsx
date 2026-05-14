@@ -14,6 +14,7 @@ import {
   LogIn,
   LogOut,
   MessageSquare,
+  Plus,
   RefreshCw,
   RotateCcw,
   Save,
@@ -32,11 +33,13 @@ import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 
 import {
+  clearCachedUser,
   getApiBase,
   getArtifactObjectUrl,
   getHistoryDetail,
   getMe,
   getModelSettings,
+  isAuthRequiredError,
   listHistory,
   login,
   logout,
@@ -44,6 +47,7 @@ import {
   register,
   setApiBase,
   streamChat,
+  streamSuggestedQuestions,
   updateModelSettings,
   uploadArtifact
 } from "../shared/api";
@@ -56,6 +60,7 @@ import type {
   ExtractedPage,
   MessageAttachment,
   ModelSettings,
+  ThinkingMode,
   User
 } from "../shared/types";
 import { captureVisibleTab, extractCurrentPage, getActiveTabInfo } from "./chrome";
@@ -69,6 +74,8 @@ type LocalMessage = {
   thought?: string;
   thoughtOpen?: boolean;
   artifacts?: MessageAttachment[];
+  suggestedQuestions?: string[];
+  suggestionsLoading?: boolean;
 };
 
 type DraftAttachment = {
@@ -97,6 +104,7 @@ type SendPromptOptions = {
 };
 
 const HISTORY_PAGE_SIZE = 20;
+const SUGGESTED_QUESTION_COUNT = 3;
 const QUICK_ACTIONS: QuickAction[] = [
   {
     label: "总结页面",
@@ -139,6 +147,34 @@ const QUICK_ACTIONS: QuickAction[] = [
     prompt: "请基于我们已有上下文，给我 3 个最值得继续追问的问题，并说明它们能帮助我澄清什么。",
     icon: Wand2
   }
+];
+
+type ModelSettingKey =
+  | "text_summary_model"
+  | "conversation_model"
+  | "xiaohongshu_model"
+  | "short_video_script_model"
+  | "suggested_questions_model";
+
+type ThinkingModeKey =
+  | "text_summary_thinking_mode"
+  | "conversation_thinking_mode"
+  | "xiaohongshu_thinking_mode"
+  | "short_video_script_thinking_mode"
+  | "suggested_questions_thinking_mode";
+
+const MODEL_SETTING_ROWS: { label: string; modelKey: ModelSettingKey; thinkingKey: ThinkingModeKey }[] = [
+  { label: "文本总结模型", modelKey: "text_summary_model", thinkingKey: "text_summary_thinking_mode" },
+  { label: "对话模型", modelKey: "conversation_model", thinkingKey: "conversation_thinking_mode" },
+  { label: "小红书文案模型", modelKey: "xiaohongshu_model", thinkingKey: "xiaohongshu_thinking_mode" },
+  { label: "短视频脚本模型", modelKey: "short_video_script_model", thinkingKey: "short_video_script_thinking_mode" },
+  { label: "建议问题模型", modelKey: "suggested_questions_model", thinkingKey: "suggested_questions_thinking_mode" }
+];
+
+const THINKING_MODE_OPTIONS: { value: ThinkingMode; label: string }[] = [
+  { value: "default", label: "默认" },
+  { value: "enabled", label: "开启" },
+  { value: "disabled", label: "关闭" }
 ];
 
 function makeLocalId(): string {
@@ -262,9 +298,7 @@ export function App() {
     async function restoreSession() {
       const cachedUser = await readCachedUser();
       if (active && cachedUser) setUser(cachedUser);
-      const restoredUser = await getMe();
       if (!active) return;
-      setUser(restoredUser);
       setBootstrapping(false);
     }
     restoreSession().catch(() => {
@@ -274,6 +308,12 @@ export function App() {
       active = false;
     };
   }, []);
+
+  async function handleAuthRequired() {
+    await clearCachedUser();
+    setUser(null);
+    setError("登录状态已失效，请重新登录。");
+  }
 
   if (bootstrapping) {
     return <LoadingScreen />;
@@ -298,8 +338,14 @@ export function App() {
           title="退出登录"
           onClick={async () => {
             setBusy(true);
-            await logout().finally(() => setBusy(false));
-            setUser(null);
+            try {
+              await logout();
+            } catch (error) {
+              setError(error instanceof Error ? error.message : "退出登录失败");
+            } finally {
+              setBusy(false);
+              setUser(null);
+            }
           }}
           disabled={busy}
         >
@@ -327,18 +373,20 @@ export function App() {
             resumeConversation={resumeDetail}
             onResumed={() => setResumeDetail(null)}
             setError={setError}
+            onAuthRequired={() => void handleAuthRequired()}
           />
         )}
         {view === "history" && (
           <HistoryView
             setError={setError}
+            onAuthRequired={() => void handleAuthRequired()}
             onContinue={(detail) => {
               setResumeDetail(detail);
               setView("chat");
             }}
           />
         )}
-        {view === "settings" && <SettingsView setError={setError} />}
+        {view === "settings" && <SettingsView setError={setError} onAuthRequired={() => void handleAuthRequired()} />}
       </main>
     </div>
   );
@@ -406,8 +454,14 @@ function AuthScreen(props: { onAuthed: (user: User) => void; error: string | nul
             onClick={async () => {
               setLoading(true);
               props.setError(null);
-              const restored = await getMe().finally(() => setLoading(false));
-              if (restored) props.onAuthed(restored);
+              try {
+                const restored = await getMe();
+                if (restored) props.onAuthed(restored);
+              } catch (error) {
+                props.setError(error instanceof Error ? error.message : "恢复会话失败");
+              } finally {
+                setLoading(false);
+              }
             }}
           >
             恢复会话
@@ -421,11 +475,13 @@ function AuthScreen(props: { onAuthed: (user: User) => void; error: string | nul
 function ChatView({
   resumeConversation,
   onResumed,
-  setError
+  setError,
+  onAuthRequired
 }: {
   resumeConversation: ConversationDetail | null;
   onResumed: () => void;
   setError: (value: string | null) => void;
+  onAuthRequired: () => void;
 }) {
   const [messages, setMessages] = useState<LocalMessage[]>([]);
   const [input, setInput] = useState("");
@@ -580,6 +636,24 @@ function ChatView({
     });
   }
 
+  function clearDrafts() {
+    setDrafts((items) => {
+      for (const item of items) URL.revokeObjectURL(item.previewUrl);
+      return [];
+    });
+  }
+
+  function startNewChat() {
+    if (sending) return;
+    setError(null);
+    setMessages([]);
+    setConversationId(null);
+    setInput("");
+    setContextSendMode(null);
+    clearDrafts();
+    textareaRef.current?.focus();
+  }
+
   async function extractPage(options: { silent?: boolean } = {}): Promise<ExtractedPage | null> {
     if (extracting) return pageRef.current;
     if (!options.silent) setError(null);
@@ -673,6 +747,21 @@ function ChatView({
     setMessages((items) => items.map((item) => (item.id === id ? { ...item, thoughtOpen: !item.thoughtOpen } : item)));
   }
 
+  function applySuggestedQuestions(assistantId: string, questions: string[], fallbackId?: string) {
+    const cleanedQuestions = questions.map((question) => question.trim()).filter(Boolean).slice(0, SUGGESTED_QUESTION_COUNT);
+    setMessages((items) => items.map((item) => (
+      item.id === assistantId || item.id === fallbackId
+        ? { ...item, suggestedQuestions: cleanedQuestions, suggestionsLoading: false }
+        : item
+    )));
+  }
+
+  function finishSuggestions(assistantId: string, fallbackId?: string) {
+    setMessages((items) => items.map((item) => (
+      item.id === assistantId || item.id === fallbackId ? { ...item, suggestionsLoading: false } : item
+    )));
+  }
+
   function applyAdkEvent(assistantId: string, event: AdkEvent) {
     const errorMessage = getEventError(event);
     if (errorMessage) setError(errorMessage);
@@ -734,6 +823,7 @@ function ChatView({
     const controller = new AbortController();
     abortRef.current = controller;
     const assistantId = makeLocalId();
+    let persistedAssistantId = assistantId;
     try {
       const draftSnapshot = [...drafts, ...(options.extraDrafts || [])];
       const pageReference = requestPage ? makePageReferenceAttachment(requestPage) : null;
@@ -744,7 +834,11 @@ function ChatView({
         content: text,
         artifacts: [...(pageReference ? [pageReference] : []), ...uploadedArtifacts]
       };
-      setMessages((items) => [...items, userMessage, { id: assistantId, role: "assistant", content: "" }]);
+      setMessages((items) => [
+        ...items.map((item) => (item.role === "assistant" ? { ...item, suggestedQuestions: undefined, suggestionsLoading: false } : item)),
+        userMessage,
+        { id: assistantId, role: "assistant", content: "", suggestionsLoading: true }
+      ]);
       setInput("");
       setDrafts([]);
       await streamChat({
@@ -768,19 +862,48 @@ function ChatView({
         onAdkEvent: (event) => applyAdkEvent(assistantId, event),
         onPersisted: (payload) => {
           if (!payload.assistant_message_id) return;
+          persistedAssistantId = payload.assistant_message_id;
           setMessages((items) => items.map((item) => (item.id === assistantId ? { ...item, id: payload.assistant_message_id || item.id } : item)));
+        },
+        onSuggestedQuestions: (payload) => {
+          applySuggestedQuestions(assistantId, payload.questions, persistedAssistantId);
         }
       });
     } catch (error) {
       if (isAbortError(error)) {
         setMessages((items) => items.map((item) => (item.id === assistantId && !item.content.trim() ? { ...item, content: "已停止生成。" } : item)));
+      } else if (isAuthRequiredError(error)) {
+        onAuthRequired();
       } else {
         setError(error instanceof Error ? error.message : "发送失败");
       }
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
+      finishSuggestions(assistantId, persistedAssistantId);
       setContextSendMode("followup");
       setSending(false);
+    }
+  }
+
+  async function refreshSuggestions(messageId: string) {
+    if (!conversationId) return;
+    setError(null);
+    setMessages((items) => items.map((item) => (item.id === messageId ? { ...item, suggestionsLoading: true } : item)));
+    try {
+      await streamSuggestedQuestions({
+        conversationId,
+        assistantMessageId: messageId,
+        count: SUGGESTED_QUESTION_COUNT,
+        onSuggestedQuestions: (payload) => applySuggestedQuestions(messageId, payload.questions)
+      });
+    } catch (error) {
+      if (isAuthRequiredError(error)) {
+        onAuthRequired();
+      } else {
+        setError(error instanceof Error ? error.message : "建议问题生成失败");
+      }
+    } finally {
+      finishSuggestions(messageId);
     }
   }
 
@@ -817,22 +940,27 @@ function ChatView({
       onDragLeave={() => setDragActive(false)}
       onDrop={handleDrop}
     >
-      <div className="context-bar">
-        <button title="提取正文" onClick={() => void extractPage()} disabled={extracting || sending}>
-          {extracting ? <Loader2 className="spin" size={16} /> : <FileText size={16} />}
-          正文
-        </button>
-        <button title="截图插入" onClick={() => void captureAndInsert()} disabled={capturing || sending}>
-          {capturing ? <Loader2 className="spin" size={16} /> : <Camera size={16} />}
-          截图
-        </button>
-        <div className={`context-status${contextDirty ? " dirty" : ""}`}>
-          <Link size={14} />
-          <span title={page?.url || activeTab?.url || pageStatus}>{pageStatus}</span>
-          {contextDirty && (
-            <button className="text-button" onClick={() => void extractPage()} disabled={extracting || sending}>刷新</button>
-          )}
+      <div className="chat-toolbar">
+        <div className="context-bar">
+          <button title="提取正文" onClick={() => void extractPage()} disabled={extracting || sending}>
+            {extracting ? <Loader2 className="spin" size={16} /> : <FileText size={16} />}
+            正文
+          </button>
+          <button title="截图插入" onClick={() => void captureAndInsert()} disabled={capturing || sending}>
+            {capturing ? <Loader2 className="spin" size={16} /> : <Camera size={16} />}
+            截图
+          </button>
+          <div className={`context-status${contextDirty ? " dirty" : ""}`}>
+            <Link size={14} />
+            <span title={page?.url || activeTab?.url || pageStatus}>{pageStatus}</span>
+            {contextDirty && (
+              <button className="text-button" onClick={() => void extractPage()} disabled={extracting || sending}>刷新</button>
+            )}
+          </div>
         </div>
+        <button className="icon-button subtle new-chat-button" title="新建聊天" onClick={startNewChat} disabled={sending}>
+          <Plus size={18} />
+        </button>
       </div>
 
       <div className="message-list">
@@ -850,6 +978,8 @@ function ChatView({
             message={message}
             streaming={sending && message.role === "assistant" && !message.content}
             onToggleThought={toggleThought}
+            onAskSuggestedQuestion={(question) => void sendPrompt(question, { contextMode: "followup" })}
+            onRefreshSuggestions={(id) => void refreshSuggestions(id)}
           />
         ))}
         <div ref={messageEndRef} />
@@ -967,13 +1097,18 @@ function DraftStrip({ drafts, onRemove }: { drafts: DraftAttachment[]; onRemove:
 function MessageBubble({
   message,
   streaming = false,
-  onToggleThought
+  onToggleThought,
+  onAskSuggestedQuestion,
+  onRefreshSuggestions
 }: {
   message: LocalMessage;
   streaming?: boolean;
   onToggleThought?: (id: string) => void;
+  onAskSuggestedQuestion?: (question: string) => void;
+  onRefreshSuggestions?: (id: string) => void;
 }) {
   const hasThought = Boolean(message.thought?.trim());
+  const suggestedQuestions = message.suggestedQuestions || [];
   const [copied, setCopied] = useState(false);
   const roleClass = message.role === "user" ? "user" : "assistant";
 
@@ -1014,6 +1149,32 @@ function MessageBubble({
       {hasThought && roleClass === "assistant" && message.thoughtOpen && (
         <div className="thought-content">
           <MarkdownMessage content={message.thought || ""} />
+        </div>
+      )}
+      {roleClass === "assistant" && (message.suggestionsLoading || suggestedQuestions.length > 0) && (
+        <div className="suggestions-panel">
+          <div className="suggestions-header">
+            <span><Wand2 size={13} />下一步可以问</span>
+            <button
+              type="button"
+              title="刷新建议问题"
+              onClick={() => onRefreshSuggestions?.(message.id)}
+              disabled={message.suggestionsLoading}
+            >
+              <RefreshCw className={message.suggestionsLoading ? "spin" : ""} size={13} />
+            </button>
+          </div>
+          {suggestedQuestions.length > 0 ? (
+            <div className="suggestion-chips">
+              {suggestedQuestions.map((question) => (
+                <button key={question} type="button" onClick={() => onAskSuggestedQuestion?.(question)}>
+                  {question}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="suggestions-loading"><TypingIndicator /></div>
+          )}
         </div>
       )}
     </article>
@@ -1126,9 +1287,11 @@ function ReferencePagePreview({ artifact }: { artifact: MessageAttachment | Arti
 
 function HistoryView({
   setError,
+  onAuthRequired,
   onContinue
 }: {
   setError: (value: string | null) => void;
+  onAuthRequired: () => void;
   onContinue: (detail: ConversationDetail) => void;
 }) {
   const [items, setItems] = useState<ConversationSummary[]>([]);
@@ -1154,7 +1317,8 @@ function HistoryView({
       setHasMore(page.has_more);
       if (!append) setDetail(null);
     } catch (error) {
-      setError(error instanceof Error ? error.message : "加载历史失败");
+      if (isAuthRequiredError(error)) onAuthRequired();
+      else setError(error instanceof Error ? error.message : "加载历史失败");
     } finally {
       setLoading(false);
     }
@@ -1169,7 +1333,8 @@ function HistoryView({
     try {
       setDetail(await getHistoryDetail(id));
     } catch (error) {
-      setError(error instanceof Error ? error.message : "加载历史详情失败");
+      if (isAuthRequiredError(error)) onAuthRequired();
+      else setError(error instanceof Error ? error.message : "加载历史详情失败");
     }
   }
 
@@ -1229,7 +1394,12 @@ function HistoryView({
   );
 }
 
-function SettingsView({ setError }: { setError: (value: string | null) => void }) {
+function normalizeThinkingMode(value?: string): ThinkingMode {
+  if (value === "enabled" || value === "disabled") return value;
+  return "default";
+}
+
+function SettingsView({ setError, onAuthRequired }: { setError: (value: string | null) => void; onAuthRequired: () => void }) {
   const [apiBaseValue, setApiBaseValue] = useState("");
   const [models, setModels] = useState<ModelSettings | null>(null);
   const [loading, setLoading] = useState(false);
@@ -1241,7 +1411,10 @@ function SettingsView({ setError }: { setError: (value: string | null) => void }
         setApiBaseValue(base);
         setModels(modelSettings);
       })
-      .catch((error) => setError(error instanceof Error ? error.message : "加载设置失败"));
+      .catch((error) => {
+        if (isAuthRequiredError(error)) onAuthRequired();
+        else setError(error instanceof Error ? error.message : "加载设置失败");
+      });
   }, [setError]);
 
   function resetModels() {
@@ -1250,8 +1423,22 @@ function SettingsView({ setError }: { setError: (value: string | null) => void }
       text_summary_model: null,
       conversation_model: null,
       xiaohongshu_model: null,
-      short_video_script_model: null
+      short_video_script_model: null,
+      suggested_questions_model: null,
+      text_summary_thinking_mode: normalizeThinkingMode(value.defaults.text_summary_thinking_mode),
+      conversation_thinking_mode: normalizeThinkingMode(value.defaults.conversation_thinking_mode),
+      xiaohongshu_thinking_mode: normalizeThinkingMode(value.defaults.xiaohongshu_thinking_mode),
+      short_video_script_thinking_mode: normalizeThinkingMode(value.defaults.short_video_script_thinking_mode),
+      suggested_questions_thinking_mode: normalizeThinkingMode(value.defaults.suggested_questions_thinking_mode)
     });
+  }
+
+  function updateModelField(key: ModelSettingKey, nextValue: string) {
+    setModels((value) => value && { ...value, [key]: nextValue });
+  }
+
+  function updateThinkingMode(key: ThinkingModeKey, nextValue: ThinkingMode) {
+    setModels((value) => value && { ...value, [key]: nextValue });
   }
 
   async function saveSettings() {
@@ -1270,7 +1457,8 @@ function SettingsView({ setError }: { setError: (value: string | null) => void }
       setModels(await updateModelSettings(models));
       setSavedAt(new Date().toLocaleTimeString());
     } catch (error) {
-      setError(error instanceof Error ? error.message : "保存设置失败");
+      if (isAuthRequiredError(error)) onAuthRequired();
+      else setError(error instanceof Error ? error.message : "保存设置失败");
     } finally {
       setLoading(false);
     }
@@ -1299,22 +1487,34 @@ function SettingsView({ setError }: { setError: (value: string | null) => void }
           </div>
           <button type="button" onClick={resetModels} disabled={!models}><RotateCcw size={15} />默认</button>
         </div>
-        <label>
-          文本总结模型
-          <input value={models?.text_summary_model || ""} placeholder={models?.defaults.text_summary_model} onChange={(event) => setModels((value) => value && { ...value, text_summary_model: event.target.value })} />
-        </label>
-        <label>
-          对话模型
-          <input value={models?.conversation_model || ""} placeholder={models?.defaults.conversation_model} onChange={(event) => setModels((value) => value && { ...value, conversation_model: event.target.value })} />
-        </label>
-        <label>
-          小红书文案模型
-          <input value={models?.xiaohongshu_model || ""} placeholder={models?.defaults.xiaohongshu_model} onChange={(event) => setModels((value) => value && { ...value, xiaohongshu_model: event.target.value })} />
-        </label>
-        <label>
-          短视频脚本模型
-          <input value={models?.short_video_script_model || ""} placeholder={models?.defaults.short_video_script_model} onChange={(event) => setModels((value) => value && { ...value, short_video_script_model: event.target.value })} />
-        </label>
+        {MODEL_SETTING_ROWS.map((row) => {
+          const thinkingMode = (models?.[row.thinkingKey] || "default") as ThinkingMode;
+          return (
+            <div className="model-setting-row" key={row.modelKey}>
+              <label>
+                {row.label}
+                <input
+                  value={models?.[row.modelKey] || ""}
+                  placeholder={models?.defaults[row.modelKey]}
+                  onChange={(event) => updateModelField(row.modelKey, event.target.value)}
+                />
+              </label>
+              <div className="thinking-toggle" role="group" aria-label={`${row.label}思考模式`}>
+                {THINKING_MODE_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className={thinkingMode === option.value ? "active" : ""}
+                    onClick={() => updateThinkingMode(row.thinkingKey, option.value)}
+                    disabled={!models}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          );
+        })}
       </div>
 
       <button className="primary-button" onClick={() => void saveSettings()} disabled={loading || !models}>

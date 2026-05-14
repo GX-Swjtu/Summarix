@@ -1,9 +1,22 @@
-import type { AdkEvent, Artifact, ConversationDetail, HistoryPage, ModelSettings, PageContext, User } from "./types";
+import type {
+  AdkEvent,
+  Artifact,
+  ConversationDetail,
+  HistoryPage,
+  ModelSettings,
+  PageContext,
+  SuggestedQuestionsPayload,
+  User
+} from "./types";
 
 const API_BASE_KEY = "summarix_api_base";
 const USER_CACHE_KEY = "summarix_user";
 
-class ResponseError extends Error {
+type RequestOptions = {
+  retryAuth?: boolean;
+};
+
+export class ResponseError extends Error {
   status: number;
 
   constructor(status: number, message: string) {
@@ -11,6 +24,17 @@ class ResponseError extends Error {
     this.name = "ResponseError";
     this.status = status;
   }
+}
+
+export class BackendUnavailableError extends Error {
+  constructor() {
+    super("后端暂时不可访问，请稍后重试。");
+    this.name = "BackendUnavailableError";
+  }
+}
+
+export function isAuthRequiredError(error: unknown): boolean {
+  return error instanceof ResponseError && error.status === 401;
 }
 
 export async function getApiBase(): Promise<string> {
@@ -24,14 +48,21 @@ export async function setApiBase(value: string): Promise<void> {
 
 async function fetchApiResponse(path: string, init: RequestInit = {}): Promise<Response> {
   const apiBase = await getApiBase();
-  return fetch(`${apiBase}${path}`, {
-    ...init,
-    credentials: "include",
-    headers: {
-      ...(init.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
-      ...(init.headers || {})
+  try {
+    return await fetch(`${apiBase}${path}`, {
+      ...init,
+      credentials: "include",
+      headers: {
+        ...(init.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
+        ...(init.headers || {})
+      }
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw error;
     }
-  });
+    throw new BackendUnavailableError();
+  }
 }
 
 async function readErrorDetail(response: Response, fallback: string): Promise<string> {
@@ -44,8 +75,16 @@ async function readErrorDetail(response: Response, fallback: string): Promise<st
   return text || fallback;
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetchApiResponse(path, init);
+async function request<T>(path: string, init: RequestInit = {}, options: RequestOptions = {}): Promise<T> {
+  const retryAuth = options.retryAuth ?? true;
+  let response = await fetchApiResponse(path, init);
+  if (response.status === 401 && retryAuth) {
+    const refreshedUser = await refreshSession();
+    if (refreshedUser) {
+      await response.body?.cancel().catch(() => undefined);
+      response = await fetchApiResponse(path, init);
+    }
+  }
   if (!response.ok) {
     throw new ResponseError(response.status, await readErrorDetail(response, response.statusText || "请求失败"));
   }
@@ -81,32 +120,47 @@ async function cacheUser(user: User | null): Promise<void> {
   }
 }
 
+export async function clearCachedUser(): Promise<void> {
+  await cacheUser(null);
+}
+
 export async function register(email: string, password: string): Promise<User> {
-  const response = await request<{ user: User }>("/api/auth/register", {
-    method: "POST",
-    body: JSON.stringify({ email, password })
-  });
+  const response = await request<{ user: User }>(
+    "/api/auth/register",
+    {
+      method: "POST",
+      body: JSON.stringify({ email, password })
+    },
+    { retryAuth: false }
+  );
   await cacheUser(response.user);
   return response.user;
 }
 
 export async function login(email: string, password: string): Promise<User> {
-  const response = await request<{ user: User }>("/api/auth/login", {
-    method: "POST",
-    body: JSON.stringify({ email, password })
-  });
+  const response = await request<{ user: User }>(
+    "/api/auth/login",
+    {
+      method: "POST",
+      body: JSON.stringify({ email, password })
+    },
+    { retryAuth: false }
+  );
   await cacheUser(response.user);
   return response.user;
 }
 
 export async function refreshSession(): Promise<User | null> {
   try {
-    const response = await request<{ user: User }>("/api/auth/refresh", { method: "POST" });
+    const response = await request<{ user: User }>("/api/auth/refresh", { method: "POST" }, { retryAuth: false });
     await cacheUser(response.user);
     return response.user;
-  } catch {
-    await cacheUser(null);
-    return null;
+  } catch (error) {
+    if (isAuthRequiredError(error)) {
+      await cacheUser(null);
+      return null;
+    }
+    throw error;
   }
 }
 
@@ -116,17 +170,20 @@ export async function getMe(): Promise<User | null> {
     await cacheUser(response.user);
     return response.user;
   } catch (error) {
-    if (error instanceof ResponseError && error.status === 401) {
-      return refreshSession();
+    if (isAuthRequiredError(error)) {
+      await cacheUser(null);
+      return null;
     }
-    await cacheUser(null);
-    return null;
+    throw error;
   }
 }
 
 export async function logout(): Promise<void> {
-  await request<void>("/api/auth/logout", { method: "POST" });
-  await cacheUser(null);
+  try {
+    await request<void>("/api/auth/logout", { method: "POST" }, { retryAuth: false });
+  } finally {
+    await cacheUser(null);
+  }
 }
 
 export async function uploadArtifact(file: Blob, filename = "image.png", source: "screenshot" | "upload" = "upload"): Promise<Artifact> {
@@ -137,7 +194,7 @@ export async function uploadArtifact(file: Blob, filename = "image.png", source:
 }
 
 export async function getArtifactObjectUrl(id: string): Promise<string> {
-  const response = await fetchApiResponse(`/api/chat/artifacts/${id}/content`);
+  const response = await fetchStreamResponse(`/api/chat/artifacts/${id}/content`);
   if (!response.ok) {
     throw new ResponseError(response.status, await readErrorDetail(response, response.statusText || "读取附件失败"));
   }
@@ -163,31 +220,18 @@ export async function updateModelSettings(payload: Partial<ModelSettings>): Prom
       text_summary_model: payload.text_summary_model || null,
       conversation_model: payload.conversation_model || null,
       xiaohongshu_model: payload.xiaohongshu_model || null,
-      short_video_script_model: payload.short_video_script_model || null
+      short_video_script_model: payload.short_video_script_model || null,
+      suggested_questions_model: payload.suggested_questions_model || null,
+      text_summary_thinking_mode: payload.text_summary_thinking_mode || "default",
+      conversation_thinking_mode: payload.conversation_thinking_mode || "default",
+      xiaohongshu_thinking_mode: payload.xiaohongshu_thinking_mode || "default",
+      short_video_script_thinking_mode: payload.short_video_script_thinking_mode || "default",
+      suggested_questions_thinking_mode: payload.suggested_questions_thinking_mode || "disabled"
     })
   });
 }
 
-export async function streamChat(options: {
-  conversationId?: string | null;
-  message: string;
-  context?: PageContext | null;
-  artifactIds?: string[];
-  signal?: AbortSignal;
-  onConversation: (payload: { id: string; user_message_id?: string; reference_artifacts?: Artifact[] }) => void;
-  onAdkEvent: (event: AdkEvent) => void;
-  onPersisted?: (payload: { assistant_message_id?: string }) => void;
-}): Promise<void> {
-  const response = await fetchStreamResponse("/api/chat/stream", {
-    method: "POST",
-    signal: options.signal,
-    body: JSON.stringify({
-      conversation_id: options.conversationId || null,
-      message: options.message,
-      context: options.context || null,
-      artifact_ids: options.artifactIds || []
-    })
-  });
+async function consumeSseResponse(response: Response, onEvent: (event: string | undefined, data: string) => Promise<void> | void): Promise<void> {
   if (!response.ok) {
     throw new ResponseError(response.status, await readErrorDetail(response, response.statusText || "流式请求失败"));
   }
@@ -199,25 +243,18 @@ export async function streamChat(options: {
   let buffer = "";
 
   const consumeEventText = async (eventText: string): Promise<void> => {
-    if (!eventText.trim()) {
-      return;
-    }
+    if (!eventText.trim()) return;
     const lines = eventText.split(/\r?\n/);
     const event = lines.find((line) => line.startsWith("event:"))?.slice(6).trim();
     const data = lines
       .filter((line) => line.startsWith("data:"))
       .map((line) => line.slice(5).trimStart())
       .join("\n");
-
-    if (event === "conversation") {
-      const payload = JSON.parse(data) as { id: string; user_message_id?: string; reference_artifacts?: Artifact[] };
-      options.onConversation(payload);
-    }
-    if (event === "adk_event") options.onAdkEvent(JSON.parse(data) as AdkEvent);
-    if (event === "persisted") options.onPersisted?.(JSON.parse(data) as { assistant_message_id?: string });
-    if (event === "error") {
-      await reader.cancel();
-      throw new Error(data || "AI 响应失败");
+    try {
+      await onEvent(event, data);
+    } catch (error) {
+      await reader.cancel().catch(() => undefined);
+      throw error;
     }
   };
 
@@ -229,10 +266,67 @@ export async function streamChat(options: {
     for (const eventText of events) {
       await consumeEventText(eventText);
     }
-    if (done) {
-      break;
-    }
+    if (done) break;
   }
 
   await consumeEventText(buffer);
+}
+
+export async function streamChat(options: {
+  conversationId?: string | null;
+  message: string;
+  context?: PageContext | null;
+  artifactIds?: string[];
+  signal?: AbortSignal;
+  suggestedQuestions?: boolean;
+  onConversation: (payload: { id: string; user_message_id?: string; reference_artifacts?: Artifact[] }) => void;
+  onAdkEvent: (event: AdkEvent) => void;
+  onPersisted?: (payload: { assistant_message_id?: string }) => void;
+  onSuggestedQuestions?: (payload: SuggestedQuestionsPayload) => void;
+}): Promise<void> {
+  const response = await fetchStreamResponse("/api/chat/stream", {
+    method: "POST",
+    signal: options.signal,
+    body: JSON.stringify({
+      conversation_id: options.conversationId || null,
+      message: options.message,
+      context: options.context || null,
+      artifact_ids: options.artifactIds || [],
+      suggested_questions: options.suggestedQuestions ?? true
+    })
+  });
+
+  await consumeSseResponse(response, async (event, data) => {
+    if (event === "conversation") {
+      const payload = JSON.parse(data) as { id: string; user_message_id?: string; reference_artifacts?: Artifact[] };
+      options.onConversation(payload);
+    }
+    if (event === "adk_event") options.onAdkEvent(JSON.parse(data) as AdkEvent);
+    if (event === "persisted") options.onPersisted?.(JSON.parse(data) as { assistant_message_id?: string });
+    if (event === "suggested_questions") options.onSuggestedQuestions?.(JSON.parse(data) as SuggestedQuestionsPayload);
+    if (event === "error") throw new Error(data || "AI 响应失败");
+  });
+}
+
+export async function streamSuggestedQuestions(options: {
+  conversationId: string;
+  assistantMessageId?: string | null;
+  count?: number;
+  signal?: AbortSignal;
+  onSuggestedQuestions: (payload: SuggestedQuestionsPayload) => void;
+}): Promise<void> {
+  const response = await fetchStreamResponse("/api/chat/suggestions/stream", {
+    method: "POST",
+    signal: options.signal,
+    body: JSON.stringify({
+      conversation_id: options.conversationId,
+      assistant_message_id: options.assistantMessageId || null,
+      count: options.count || 3
+    })
+  });
+
+  await consumeSseResponse(response, async (event, data) => {
+    if (event === "suggested_questions") options.onSuggestedQuestions(JSON.parse(data) as SuggestedQuestionsPayload);
+    if (event === "error") throw new Error(data || "建议问题生成失败");
+  });
 }

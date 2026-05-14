@@ -8,6 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 LOCAL_EXTENSION_ORIGIN_REGEX = r"^(chrome-extension://[a-p]{32}|moz-extension://[0-9a-fA-F-]{36})$"
+ThinkingMode = Literal["default", "enabled", "disabled"]
 
 
 class Settings(BaseSettings):
@@ -52,6 +53,12 @@ class Settings(BaseSettings):
     conversation_model: str | None = None
     xiaohongshu_model: str | None = None
     short_video_script_model: str | None = None
+    suggested_questions_model: str | None = None
+    text_summary_thinking_mode: ThinkingMode = "default"
+    conversation_thinking_mode: ThinkingMode = "default"
+    xiaohongshu_thinking_mode: ThinkingMode = "default"
+    short_video_script_thinking_mode: ThinkingMode = "default"
+    suggested_questions_thinking_mode: ThinkingMode = "disabled"
     adk_database_url: str | None = None
 
     @field_validator("cors_allow_origins", "browser_extension_origins", mode="before")
@@ -129,6 +136,10 @@ class Settings(BaseSettings):
     @property
     def effective_short_video_script_model(self) -> str:
         return self.short_video_script_model or self.default_chat_model
+
+    @property
+    def effective_suggested_questions_model(self) -> str:
+        return self.suggested_questions_model or self.default_chat_model
 
 
 @lru_cache

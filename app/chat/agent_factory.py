@@ -3,6 +3,8 @@ from dataclasses import dataclass
 from google.adk.agents import LlmAgent
 from google.adk.models.lite_llm import LiteLlm
 
+from app.core.config import ThinkingMode
+
 
 @dataclass(frozen=True)
 class WebAssistantModelConfig:
@@ -10,12 +12,28 @@ class WebAssistantModelConfig:
     text_summary_model: str
     xiaohongshu_model: str
     short_video_script_model: str
+    suggested_questions_model: str
+    conversation_thinking_mode: ThinkingMode
+    text_summary_thinking_mode: ThinkingMode
+    xiaohongshu_thinking_mode: ThinkingMode
+    short_video_script_thinking_mode: ThinkingMode
+    suggested_questions_thinking_mode: ThinkingMode
 
 
-def create_summary_expert(model_name: str) -> LlmAgent:
+def build_litellm_kwargs(thinking_mode: ThinkingMode) -> dict[str, object]:
+    if thinking_mode == "default":
+        return {}
+    return {"extra_body": {"enable_thinking": thinking_mode == "enabled"}}
+
+
+def create_litellm(model_name: str, thinking_mode: ThinkingMode) -> LiteLlm:
+    return LiteLlm(model=model_name, **build_litellm_kwargs(thinking_mode))
+
+
+def create_summary_expert(model_name: str, thinking_mode: ThinkingMode) -> LlmAgent:
     return LlmAgent(
         name="summary_expert",
-        model=LiteLlm(model=model_name),
+        model=create_litellm(model_name, thinking_mode),
         description="总结网页正文、提炼要点、归纳主题、输出结构化摘要的专家。",
         instruction=(
             "你是 Summarix 的网页总结专家。只处理网页总结、摘要、要点提炼、主题归纳和信息压缩任务。"
@@ -25,10 +43,10 @@ def create_summary_expert(model_name: str) -> LlmAgent:
     )
 
 
-def create_visual_context_expert(model_name: str) -> LlmAgent:
+def create_visual_context_expert(model_name: str, thinking_mode: ThinkingMode) -> LlmAgent:
     return LlmAgent(
         name="visual_context_expert",
-        model=LiteLlm(model=model_name),
+        model=create_litellm(model_name, thinking_mode),
         description="分析截图、图片和视觉附件，并结合网页上下文回答问题的专家。",
         instruction=(
             "你是 Summarix 的视觉上下文专家。处理用户提供截图、图片或视觉附件时的问题。"
@@ -38,10 +56,10 @@ def create_visual_context_expert(model_name: str) -> LlmAgent:
     )
 
 
-def create_xiaohongshu_copy_expert(model_name: str) -> LlmAgent:
+def create_xiaohongshu_copy_expert(model_name: str, thinking_mode: ThinkingMode) -> LlmAgent:
     return LlmAgent(
         name="xiaohongshu_copy_expert",
-        model=LiteLlm(model=model_name),
+        model=create_litellm(model_name, thinking_mode),
         description="把网页主体文章改写成可直接复制发布的小红书成品文案，适合种草、笔记和移动端阅读。",
         instruction=(
             "你是 Summarix 的小红书文案专家。请保留原文核心事实，不编造来源、数据或个人经历；"
@@ -58,10 +76,10 @@ def create_xiaohongshu_copy_expert(model_name: str) -> LlmAgent:
     )
 
 
-def create_short_video_script_expert(model_name: str) -> LlmAgent:
+def create_short_video_script_expert(model_name: str, thinking_mode: ThinkingMode) -> LlmAgent:
     return LlmAgent(
         name="short_video_script_expert",
-        model=LiteLlm(model=model_name),
+        model=create_litellm(model_name, thinking_mode),
         description="把网页主体文章改写成短视频脚本、口播脚本和分镜表的专家。",
         instruction=(
             "你是 Summarix 的短视频脚本专家。请基于原文核心事实设计脚本，不编造不存在的人物、场景、数据或结论。"
@@ -75,14 +93,17 @@ def create_short_video_script_expert(model_name: str) -> LlmAgent:
 
 
 def create_web_assistant(model_config: WebAssistantModelConfig) -> LlmAgent:
-    summary_expert = create_summary_expert(model_config.text_summary_model)
-    visual_context_expert = create_visual_context_expert(model_config.conversation_model)
-    xiaohongshu_copy_expert = create_xiaohongshu_copy_expert(model_config.xiaohongshu_model)
-    short_video_script_expert = create_short_video_script_expert(model_config.short_video_script_model)
+    summary_expert = create_summary_expert(model_config.text_summary_model, model_config.text_summary_thinking_mode)
+    visual_context_expert = create_visual_context_expert(model_config.conversation_model, model_config.conversation_thinking_mode)
+    xiaohongshu_copy_expert = create_xiaohongshu_copy_expert(model_config.xiaohongshu_model, model_config.xiaohongshu_thinking_mode)
+    short_video_script_expert = create_short_video_script_expert(
+        model_config.short_video_script_model,
+        model_config.short_video_script_thinking_mode,
+    )
 
     return LlmAgent(
         name="summarix_web_assistant",
-        model=LiteLlm(model=model_config.conversation_model),
+        model=create_litellm(model_config.conversation_model, model_config.conversation_thinking_mode),
         description="Summarix 的唯一入口智能体，可直接回答通用问题并把专业任务委派给专家团队。",
         instruction=(
             "你是 Summarix 浏览器助手，也是专家智能体团队的唯一入口。"

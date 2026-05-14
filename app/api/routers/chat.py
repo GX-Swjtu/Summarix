@@ -6,9 +6,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
 from app.api.deps import get_current_user
-from app.api.schemas import ArtifactResponse, ArtifactSource, ChatStreamRequest
+from app.api.schemas import ArtifactResponse, ArtifactSource, ChatStreamRequest, SuggestedQuestionsStreamRequest
 from app.chat.artifacts import load_artifact_part, save_upload_artifact
-from app.chat.stream_service import stream_chat_response
+from app.chat.stream_service import stream_chat_response, stream_suggested_questions_response
 from app.core.config import Settings, get_settings
 from app.db.models import MessageArtifact, User
 from app.db.session import get_db_session
@@ -103,3 +103,13 @@ async def stream_chat(
     settings: Settings = Depends(get_settings),
 ) -> EventSourceResponse:
     return EventSourceResponse(stream_chat_response(session, current_user.id, payload, settings))
+
+
+@router.post("/suggestions/stream")
+async def stream_suggested_questions(
+    payload: SuggestedQuestionsStreamRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> EventSourceResponse:
+    return EventSourceResponse(stream_suggested_questions_response(session, current_user.id, payload, settings))

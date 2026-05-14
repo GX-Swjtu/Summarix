@@ -17,11 +17,25 @@ def build_settings_response(preference: UserModelPreference | None, settings: Se
         conversation_model=preference.conversation_model if preference else None,
         xiaohongshu_model=preference.xiaohongshu_model if preference else None,
         short_video_script_model=preference.short_video_script_model if preference else None,
+        suggested_questions_model=preference.suggested_questions_model if preference else None,
+        text_summary_thinking_mode=(preference.text_summary_thinking_mode if preference else None) or settings.text_summary_thinking_mode,
+        conversation_thinking_mode=(preference.conversation_thinking_mode if preference else None) or settings.conversation_thinking_mode,
+        xiaohongshu_thinking_mode=(preference.xiaohongshu_thinking_mode if preference else None) or settings.xiaohongshu_thinking_mode,
+        short_video_script_thinking_mode=(preference.short_video_script_thinking_mode if preference else None)
+        or settings.short_video_script_thinking_mode,
+        suggested_questions_thinking_mode=(preference.suggested_questions_thinking_mode if preference else None)
+        or settings.suggested_questions_thinking_mode,
         defaults={
             "text_summary_model": settings.effective_text_model,
             "conversation_model": settings.effective_conversation_model,
             "xiaohongshu_model": settings.effective_xiaohongshu_model,
             "short_video_script_model": settings.effective_short_video_script_model,
+            "suggested_questions_model": settings.effective_suggested_questions_model,
+            "text_summary_thinking_mode": settings.text_summary_thinking_mode,
+            "conversation_thinking_mode": settings.conversation_thinking_mode,
+            "xiaohongshu_thinking_mode": settings.xiaohongshu_thinking_mode,
+            "short_video_script_thinking_mode": settings.short_video_script_thinking_mode,
+            "suggested_questions_thinking_mode": settings.suggested_questions_thinking_mode,
         },
     )
 
@@ -52,6 +66,12 @@ async def update_model_settings(
     preference.conversation_model = payload.conversation_model
     preference.xiaohongshu_model = payload.xiaohongshu_model
     preference.short_video_script_model = payload.short_video_script_model
+    preference.suggested_questions_model = payload.suggested_questions_model
+    preference.text_summary_thinking_mode = payload.text_summary_thinking_mode
+    preference.conversation_thinking_mode = payload.conversation_thinking_mode
+    preference.xiaohongshu_thinking_mode = payload.xiaohongshu_thinking_mode
+    preference.short_video_script_thinking_mode = payload.short_video_script_thinking_mode
+    preference.suggested_questions_thinking_mode = payload.suggested_questions_thinking_mode
     await session.commit()
     await session.refresh(preference)
     return build_settings_response(preference, settings)

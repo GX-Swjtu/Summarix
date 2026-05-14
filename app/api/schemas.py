@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
 ArtifactSource = Literal["screenshot", "page_text", "selection", "upload"]
+ThinkingMode = Literal["default", "enabled", "disabled"]
 
 
 class UserPublic(BaseModel):
@@ -48,6 +49,7 @@ class ChatStreamRequest(BaseModel):
     message: str = Field(min_length=1, max_length=20000)
     context: ConversationContext | None = None
     artifact_ids: list[str] = Field(default_factory=list)
+    suggested_questions: bool = False
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -60,6 +62,23 @@ class ChatStreamRequest(BaseModel):
                     "page_text": "网页正文内容...",
                 },
                 "artifact_ids": ["8e34a2c2-6e9e-4e90-9f92-6e1bc0f3b8b2"],
+                "suggested_questions": True,
+            }
+        }
+    )
+
+
+class SuggestedQuestionsStreamRequest(BaseModel):
+    conversation_id: str
+    assistant_message_id: str | None = None
+    count: int = Field(default=3, ge=1, le=5)
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "conversation_id": "1fba6184-8e9a-4a3d-a6e1-cb7f65a6b4b1",
+                "assistant_message_id": "62cdb617-711b-4db2-a813-855d2b9e0112",
+                "count": 3,
             }
         }
     )
@@ -118,6 +137,12 @@ class ModelSettingsRequest(BaseModel):
     conversation_model: str | None = Field(default=None, max_length=120)
     xiaohongshu_model: str | None = Field(default=None, max_length=120)
     short_video_script_model: str | None = Field(default=None, max_length=120)
+    suggested_questions_model: str | None = Field(default=None, max_length=120)
+    text_summary_thinking_mode: ThinkingMode = "default"
+    conversation_thinking_mode: ThinkingMode = "default"
+    xiaohongshu_thinking_mode: ThinkingMode = "default"
+    short_video_script_thinking_mode: ThinkingMode = "default"
+    suggested_questions_thinking_mode: ThinkingMode = "disabled"
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -126,6 +151,12 @@ class ModelSettingsRequest(BaseModel):
                 "conversation_model": "dashscope/qwen3.5-flash",
                 "xiaohongshu_model": "dashscope/qwen3.5-flash",
                 "short_video_script_model": "dashscope/qwen3.5-flash",
+                "suggested_questions_model": "dashscope/qwen3.5-flash",
+                "text_summary_thinking_mode": "default",
+                "conversation_thinking_mode": "default",
+                "xiaohongshu_thinking_mode": "default",
+                "short_video_script_thinking_mode": "default",
+                "suggested_questions_thinking_mode": "disabled",
             }
         }
     )

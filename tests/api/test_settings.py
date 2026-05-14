@@ -10,6 +10,12 @@ async def test_get_and_update_model_settings(authenticated_client: AsyncClient):
     assert "vision_analysis_model" not in defaults
     assert defaults["xiaohongshu_model"] == "dashscope/qwen3.5-flash"
     assert defaults["short_video_script_model"] == "dashscope/qwen3.5-flash"
+    assert defaults["suggested_questions_model"] == "dashscope/qwen3.5-flash"
+    assert defaults["conversation_thinking_mode"] == "default"
+    assert defaults["text_summary_thinking_mode"] == "default"
+    assert defaults["xiaohongshu_thinking_mode"] == "default"
+    assert defaults["short_video_script_thinking_mode"] == "default"
+    assert defaults["suggested_questions_thinking_mode"] == "disabled"
 
     update_response = await authenticated_client.put(
         "/api/settings/models",
@@ -18,6 +24,12 @@ async def test_get_and_update_model_settings(authenticated_client: AsyncClient):
             "conversation_model": "dashscope/qwen3.5-flash",
             "xiaohongshu_model": "dashscope/qwen-xhs",
             "short_video_script_model": "dashscope/qwen-video",
+            "suggested_questions_model": "dashscope/qwen-suggestions",
+            "conversation_thinking_mode": "enabled",
+            "text_summary_thinking_mode": "disabled",
+            "xiaohongshu_thinking_mode": "default",
+            "short_video_script_thinking_mode": "enabled",
+            "suggested_questions_thinking_mode": "disabled",
         },
     )
     assert update_response.status_code == 200
@@ -25,3 +37,9 @@ async def test_get_and_update_model_settings(authenticated_client: AsyncClient):
     assert "vision_analysis_model" not in payload
     assert payload["xiaohongshu_model"] == "dashscope/qwen-xhs"
     assert payload["short_video_script_model"] == "dashscope/qwen-video"
+    assert payload["suggested_questions_model"] == "dashscope/qwen-suggestions"
+    assert payload["conversation_thinking_mode"] == "enabled"
+    assert payload["text_summary_thinking_mode"] == "disabled"
+    assert payload["xiaohongshu_thinking_mode"] == "default"
+    assert payload["short_video_script_thinking_mode"] == "enabled"
+    assert payload["suggested_questions_thinking_mode"] == "disabled"

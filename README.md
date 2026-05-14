@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/GX-Swjtu/Summarix/actions/workflows/ci.yml/badge.svg)](https://github.com/GX-Swjtu/Summarix/actions/workflows/ci.yml)
 
-Summarix 是一个基于 Chromium Side Panel 的 AI 网页总结插件，配套 FastAPI 后端。插件负责登录、网页正文提取、截图上传、流式聊天、历史查看、模型设置，以及把网页主体文章快捷转换为小红书文案和短视频脚本；后端负责用户认证、PostgreSQL 数据存储、ADK agent 调用、LiteLLM 模型切换和 SSE 流式响应。
+Summarix 是一个基于 Chromium Side Panel 的 AI 网页总结插件，配套 FastAPI 后端。插件负责登录、网页正文提取、截图上传、流式聊天、下一步建议问题、历史查看、模型设置，以及把网页主体文章快捷转换为小红书文案和短视频脚本；后端负责用户认证、PostgreSQL 数据存储、ADK agent 调用、LiteLLM 模型切换和 SSE 流式响应。
 
 ## 项目结构
 
@@ -47,7 +47,11 @@ uv run --env-file .env main.py
 
 LiteLLM 模型请直接使用 `provider/model` 形式，例如 `dashscope/qwen3.5-flash` 或 `dashscope/qwen3.5-flash`。后端不会再自动补全 provider。
 
-模型可按任务分别配置：`TEXT_SUMMARY_MODEL` 用于网页总结，`CONVERSATION_MODEL` 用于通用对话，`XIAOHONGSHU_MODEL` 用于小红书文案，`SHORT_VIDEO_SCRIPT_MODEL` 用于短视频脚本。用户也可以在 Side Panel 设置页覆盖这些模型。
+模型可按任务分别配置：`TEXT_SUMMARY_MODEL` 用于网页总结，`CONVERSATION_MODEL` 用于通用对话，`XIAOHONGSHU_MODEL` 用于小红书文案，`SHORT_VIDEO_SCRIPT_MODEL` 用于短视频脚本，`SUGGESTED_QUESTIONS_MODEL` 用于下一步建议问题。用户也可以在 Side Panel 设置页覆盖这些模型。
+
+每个模型角色都支持 thinking mode 三态配置：`default` 不向 LiteLLM 传 `extra_body`，`enabled` 传 `{"extra_body":{"enable_thinking":true}}`，`disabled` 传 `{"extra_body":{"enable_thinking":false}}`。对应环境变量为 `TEXT_SUMMARY_THINKING_MODE`、`CONVERSATION_THINKING_MODE`、`XIAOHONGSHU_THINKING_MODE`、`SHORT_VIDEO_SCRIPT_THINKING_MODE`、`SUGGESTED_QUESTIONS_THINKING_MODE`；建议问题默认使用 `disabled`，其他角色默认使用 `default`。
+
+如果已有开发库是在这些模型偏好列加入前创建的，需要重建本地开发库或手动补齐 `user_model_preferences` 新列；项目当前没有迁移脚本，`DATABASE_AUTO_CREATE_TABLES=true` 只会创建缺失表，不会修改已存在表结构。
 
 截图和图片不再配置单独的视觉分析模型，会随当前任务交给对应模型处理；聊天界面会在发送图片时提醒用户确认模型支持图像输入。
 
@@ -75,6 +79,7 @@ BROWSER_EXTENSION_ORIGINS=chrome-extension://your-extension-id
 - `POST /api/auth/logout`：退出并吊销当前 refresh token。
 - `POST /api/chat/artifacts`：上传截图或其他文件，返回 `artifact_id`。
 - `POST /api/chat/stream`：基于文本、网页上下文和 artifact 引用返回 SSE 流。
+- `POST /api/chat/suggestions/stream`：基于已有会话返回下一步建议问题 SSE 流。
 - `GET /api/history?offset=0&limit=20` / `GET /api/history/{id}`：分页读取云端历史。
 - `GET /api/settings/models` / `PUT /api/settings/models`：读取和更新模型偏好。
 
