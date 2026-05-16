@@ -88,11 +88,16 @@ export type AdkEvent = {
 
 export type ThinkingMode = "default" | "enabled" | "disabled";
 
+export type ThemePreference = "default" | "light" | "dark";
+
+export type ResolvedTheme = "light" | "dark";
+
 export type SuggestedQuestionsPayload = {
   questions: string[];
 };
 
 export type ModelSettings = {
+  theme: ThemePreference;
   text_summary_model?: string | null;
   conversation_model?: string | null;
   xiaohongshu_model?: string | null;

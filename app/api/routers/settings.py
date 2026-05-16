@@ -13,6 +13,7 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 
 def build_settings_response(preference: UserModelPreference | None, settings: Settings) -> ModelSettingsResponse:
     return ModelSettingsResponse(
+        theme=(preference.theme if preference else None) or "default",
         text_summary_model=preference.text_summary_model if preference else None,
         conversation_model=preference.conversation_model if preference else None,
         xiaohongshu_model=preference.xiaohongshu_model if preference else None,
@@ -36,6 +37,7 @@ def build_settings_response(preference: UserModelPreference | None, settings: Se
             "xiaohongshu_thinking_mode": settings.xiaohongshu_thinking_mode,
             "short_video_script_thinking_mode": settings.short_video_script_thinking_mode,
             "suggested_questions_thinking_mode": settings.suggested_questions_thinking_mode,
+            "theme": "default",
         },
     )
 
@@ -72,6 +74,7 @@ async def update_model_settings(
     preference.xiaohongshu_thinking_mode = payload.xiaohongshu_thinking_mode
     preference.short_video_script_thinking_mode = payload.short_video_script_thinking_mode
     preference.suggested_questions_thinking_mode = payload.suggested_questions_thinking_mode
+    preference.theme = payload.theme
     await session.commit()
     await session.refresh(preference)
     return build_settings_response(preference, settings)

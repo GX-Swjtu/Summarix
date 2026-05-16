@@ -120,6 +120,7 @@ class UserModelPreference(Base):
     xiaohongshu_thinking_mode: Mapped[str] = mapped_column(String(20), nullable=False, default="default")
     short_video_script_thinking_mode: Mapped[str] = mapped_column(String(20), nullable=False, default="default")
     suggested_questions_thinking_mode: Mapped[str] = mapped_column(String(20), nullable=False, default="disabled")
+    theme: Mapped[str] = mapped_column(String(20), nullable=False, default="default")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
 

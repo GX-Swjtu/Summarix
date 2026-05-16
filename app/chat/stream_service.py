@@ -339,7 +339,7 @@ async def load_recent_messages(
     result = await session.execute(
         select(Message)
         .where(Message.conversation_id == conversation_id)
-        .order_by(Message.created_at.desc())
+        .order_by(Message.created_at.desc(), Message.id.desc())
         .limit(limit)
     )
     return list(reversed(result.scalars().all()))

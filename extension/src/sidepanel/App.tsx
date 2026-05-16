@@ -14,6 +14,8 @@ import {
   LogIn,
   LogOut,
   MessageSquare,
+  Monitor,
+  Moon,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -23,11 +25,12 @@ import {
   Settings,
   Sparkles,
   Square,
+  Sun,
   Wand2,
   X
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
@@ -60,9 +63,12 @@ import type {
   ExtractedPage,
   MessageAttachment,
   ModelSettings,
+  ResolvedTheme,
+  ThemePreference,
   ThinkingMode,
   User
 } from "../shared/types";
+import { applyThemePreference, cacheThemePreference, getSystemTheme, normalizeThemePreference, resolveThemePreference } from "../shared/theme";
 import { captureVisibleTab, extractCurrentPage, getActiveTabInfo } from "./chrome";
 
 type View = "chat" | "history" | "settings";
@@ -103,8 +109,13 @@ type SendPromptOptions = {
   contextMode?: ContextSendMode;
 };
 
+type MessageScrollBehavior = "instant" | "smooth";
+
 const HISTORY_PAGE_SIZE = 20;
 const SUGGESTED_QUESTION_COUNT = 3;
+const AUTO_SCROLL_BOTTOM_THRESHOLD = 64;
+const PROGRAMMATIC_SCROLL_LOCK_MS = 400;
+const USER_SCROLL_INTENT_MS = 250;
 const QUICK_ACTIONS: QuickAction[] = [
   {
     label: "总结页面",
@@ -171,10 +182,16 @@ const MODEL_SETTING_ROWS: { label: string; modelKey: ModelSettingKey; thinkingKe
   { label: "建议问题模型", modelKey: "suggested_questions_model", thinkingKey: "suggested_questions_thinking_mode" }
 ];
 
-const THINKING_MODE_OPTIONS: { value: ThinkingMode; label: string }[] = [
-  { value: "default", label: "默认" },
-  { value: "enabled", label: "开启" },
-  { value: "disabled", label: "关闭" }
+const THINKING_MODE_OPTIONS: { value: ThinkingMode; label: string; title: string }[] = [
+  { value: "default", label: "默认", title: "跟随模型默认行为，不强制启用或关闭深度思考" },
+  { value: "enabled", label: "开启", title: "强制启用深度思考（逐步推理），适合复杂任务，响应较慢" },
+  { value: "disabled", label: "关闭", title: "强制关闭深度思考，响应更快、成本更低" }
+];
+
+const THEME_OPTIONS: { value: ThemePreference; label: string; icon: LucideIcon }[] = [
+  { value: "default", label: "默认", icon: Monitor },
+  { value: "light", label: "浅色", icon: Sun },
+  { value: "dark", label: "深色", icon: Moon }
 ];
 
 function makeLocalId(): string {
@@ -285,13 +302,60 @@ function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
 }
 
-export function App() {
+export function App({ initialThemePreference = "default" }: { initialThemePreference?: ThemePreference }) {
   const [user, setUser] = useState<User | null>(null);
   const [bootstrapping, setBootstrapping] = useState(true);
   const [view, setView] = useState<View>("chat");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [resumeDetail, setResumeDetail] = useState<ConversationDetail | null>(null);
+  const [themePreference, setThemePreference] = useState<ThemePreference>(initialThemePreference);
+  const [systemTheme, setSystemTheme] = useState<ResolvedTheme>(() => getSystemTheme());
+  const resolvedTheme = useMemo(() => resolveThemePreference(themePreference, systemTheme), [systemTheme, themePreference]);
+
+  const handleAuthRequired = useCallback(async () => {
+    await clearCachedUser();
+    setUser(null);
+    setError("登录状态已失效，请重新登录。");
+  }, []);
+
+  const persistThemePreference = useCallback((nextThemePreference: ThemePreference) => {
+    setThemePreference(nextThemePreference);
+    void cacheThemePreference(nextThemePreference);
+  }, []);
+
+  useEffect(() => {
+    applyThemePreference(themePreference, systemTheme);
+  }, [systemTheme, themePreference]);
+
+  useEffect(() => {
+    if (themePreference !== "default" || typeof window === "undefined" || !window.matchMedia) return;
+    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    const updateSystemTheme = () => setSystemTheme(mediaQuery.matches ? "dark" : "light");
+    updateSystemTheme();
+    mediaQuery.addEventListener("change", updateSystemTheme);
+    return () => mediaQuery.removeEventListener("change", updateSystemTheme);
+  }, [themePreference]);
+
+  useEffect(() => {
+    if (!user) return;
+    let active = true;
+    getModelSettings()
+      .then((settings) => {
+        if (!active) return;
+        const nextThemePreference = normalizeThemePreference(settings.theme);
+        setThemePreference(nextThemePreference);
+        void cacheThemePreference(nextThemePreference);
+      })
+      .catch((error) => {
+        if (!active) return;
+        if (isAuthRequiredError(error)) void handleAuthRequired();
+        else setError(error instanceof Error ? error.message : "加载主题设置失败");
+      });
+    return () => {
+      active = false;
+    };
+  }, [handleAuthRequired, user]);
 
   useEffect(() => {
     let active = true;
@@ -309,11 +373,17 @@ export function App() {
     };
   }, []);
 
-  async function handleAuthRequired() {
-    await clearCachedUser();
-    setUser(null);
-    setError("登录状态已失效，请重新登录。");
-  }
+  const handleLogout = useCallback(async () => {
+    setBusy(true);
+    try {
+      await logout();
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "退出登录失败");
+    } finally {
+      setBusy(false);
+      setUser(null);
+    }
+  }, []);
 
   if (bootstrapping) {
     return <LoadingScreen />;
@@ -333,24 +403,6 @@ export function App() {
             <span>{user.email}</span>
           </div>
         </div>
-        <button
-          className="icon-button subtle"
-          title="退出登录"
-          onClick={async () => {
-            setBusy(true);
-            try {
-              await logout();
-            } catch (error) {
-              setError(error instanceof Error ? error.message : "退出登录失败");
-            } finally {
-              setBusy(false);
-              setUser(null);
-            }
-          }}
-          disabled={busy}
-        >
-          {busy ? <Loader2 className="spin" size={18} /> : <LogOut size={18} />}
-        </button>
       </header>
 
       <nav className="tabs" aria-label="主导航">
@@ -379,14 +431,25 @@ export function App() {
         {view === "history" && (
           <HistoryView
             setError={setError}
-            onAuthRequired={() => void handleAuthRequired()}
+            onAuthRequired={handleAuthRequired}
             onContinue={(detail) => {
               setResumeDetail(detail);
               setView("chat");
             }}
           />
         )}
-        {view === "settings" && <SettingsView setError={setError} onAuthRequired={() => void handleAuthRequired()} />}
+        {view === "settings" && (
+          <SettingsView
+            setError={setError}
+            onAuthRequired={() => void handleAuthRequired()}
+            themePreference={themePreference}
+            resolvedTheme={resolvedTheme}
+            onThemePreferenceChange={setThemePreference}
+            onThemePreferencePersisted={persistThemePreference}
+            onLogout={() => void handleLogout()}
+            logoutPending={busy}
+          />
+        )}
       </main>
     </div>
   );
@@ -498,11 +561,20 @@ function ChatView({
   const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const messageEndRef = useRef<HTMLDivElement | null>(null);
+  const messageListRef = useRef<HTMLDivElement | null>(null);
   const pageRef = useRef<ExtractedPage | null>(null);
   const activeTabRef = useRef<ActiveTabInfo | null>(null);
   const draftsRef = useRef<DraftAttachment[]>([]);
   const abortRef = useRef<AbortController | null>(null);
+  const autoScrollRef = useRef(true);
+  const nextAutoScrollBehaviorRef = useRef<MessageScrollBehavior | null>(null);
+  const pendingScrollFrameRef = useRef<number | null>(null);
+  const pendingScrollBehaviorRef = useRef<MessageScrollBehavior>("instant");
+  const programmaticScrollUntilRef = useRef(0);
+  const userScrollIntentRef = useRef(false);
+  const userScrollIntentTimerRef = useRef<number | null>(null);
+  const lastMessageCountRef = useRef(0);
+  const lastMessageScrollTopRef = useRef(0);
 
   const pageStatus = useMemo(() => {
     if (extracting) return "正在读取当前网页";
@@ -519,6 +591,59 @@ function ChatView({
   const selectedContextSendMode: ContextSendMode = contextSendMode ?? (shouldAutoAttachFirstPage ? "attachPage" : "followup");
   const attachContextLabel = pageNeedsRefresh ? "附新页" : "附当前页";
 
+  function isMessageListNearBottom(element: HTMLDivElement): boolean {
+    return element.scrollHeight - element.scrollTop - element.clientHeight <= AUTO_SCROLL_BOTTOM_THRESHOLD;
+  }
+
+  function scrollMessageListToBottom(behavior: MessageScrollBehavior) {
+    const messageList = messageListRef.current;
+    if (!messageList) return;
+    programmaticScrollUntilRef.current = performance.now() + PROGRAMMATIC_SCROLL_LOCK_MS;
+    messageList.scrollTo({ top: messageList.scrollHeight, behavior });
+    lastMessageScrollTopRef.current = messageList.scrollTop;
+  }
+
+  function scheduleMessageListScroll(behavior: MessageScrollBehavior) {
+    if (behavior === "smooth") pendingScrollBehaviorRef.current = "smooth";
+    if (pendingScrollFrameRef.current !== null) return;
+    pendingScrollFrameRef.current = window.requestAnimationFrame(() => {
+      pendingScrollFrameRef.current = null;
+      const nextBehavior = pendingScrollBehaviorRef.current;
+      pendingScrollBehaviorRef.current = "instant";
+      if (!autoScrollRef.current) return;
+      scrollMessageListToBottom(nextBehavior);
+    });
+  }
+
+  function enableAutoScrollOnNextRender(behavior: MessageScrollBehavior) {
+    autoScrollRef.current = true;
+    nextAutoScrollBehaviorRef.current = behavior;
+  }
+
+  function noteMessageListUserScrollIntent() {
+    userScrollIntentRef.current = true;
+    if (userScrollIntentTimerRef.current !== null) window.clearTimeout(userScrollIntentTimerRef.current);
+    userScrollIntentTimerRef.current = window.setTimeout(() => {
+      userScrollIntentRef.current = false;
+      userScrollIntentTimerRef.current = null;
+    }, USER_SCROLL_INTENT_MS);
+  }
+
+  function handleMessageListScroll() {
+    const messageList = messageListRef.current;
+    if (!messageList) return;
+    const nextScrollTop = messageList.scrollTop;
+    const userMovedUp = nextScrollTop < lastMessageScrollTopRef.current - 1;
+    lastMessageScrollTopRef.current = nextScrollTop;
+    if (isMessageListNearBottom(messageList)) {
+      autoScrollRef.current = true;
+      return;
+    }
+    const isProgrammaticScroll = performance.now() < programmaticScrollUntilRef.current && !userScrollIntentRef.current;
+    if (isProgrammaticScroll) return;
+    if (userMovedUp || userScrollIntentRef.current) autoScrollRef.current = false;
+  }
+
   useEffect(() => {
     pageRef.current = page;
   }, [page]);
@@ -532,11 +657,16 @@ function ChatView({
   }, [drafts]);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      messageEndRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
-    }, 20);
-    return () => window.clearTimeout(timer);
-  }, [messages, sending]);
+    const previousMessageCount = lastMessageCountRef.current;
+    lastMessageCountRef.current = messages.length;
+    if (!autoScrollRef.current || messages.length === 0) {
+      nextAutoScrollBehaviorRef.current = null;
+      return;
+    }
+    const requestedBehavior = nextAutoScrollBehaviorRef.current;
+    nextAutoScrollBehaviorRef.current = null;
+    scheduleMessageListScroll(requestedBehavior ?? (messages.length > previousMessageCount ? "smooth" : "instant"));
+  }, [messages]);
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -575,6 +705,8 @@ function ChatView({
 
   useEffect(() => {
     return () => {
+      if (pendingScrollFrameRef.current !== null) window.cancelAnimationFrame(pendingScrollFrameRef.current);
+      if (userScrollIntentTimerRef.current !== null) window.clearTimeout(userScrollIntentTimerRef.current);
       abortRef.current?.abort();
       for (const draft of draftsRef.current) URL.revokeObjectURL(draft.previewUrl);
     };
@@ -582,6 +714,7 @@ function ChatView({
 
   useEffect(() => {
     if (!resumeConversation) return;
+    enableAutoScrollOnNextRender("instant");
     setConversationId(resumeConversation.id);
     setMessages(
       resumeConversation.messages.map((message) => ({
@@ -646,6 +779,7 @@ function ChatView({
   function startNewChat() {
     if (sending) return;
     setError(null);
+    enableAutoScrollOnNextRender("instant");
     setMessages([]);
     setConversationId(null);
     setInput("");
@@ -834,6 +968,7 @@ function ChatView({
         content: text,
         artifacts: [...(pageReference ? [pageReference] : []), ...uploadedArtifacts]
       };
+      enableAutoScrollOnNextRender("smooth");
       setMessages((items) => [
         ...items.map((item) => (item.role === "assistant" ? { ...item, suggestedQuestions: undefined, suggestionsLoading: false } : item)),
         userMessage,
@@ -968,7 +1103,14 @@ function ChatView({
         </button>
       </div>
 
-      <div className="message-list">
+      <div
+        className="message-list"
+        ref={messageListRef}
+        onScroll={handleMessageListScroll}
+        onWheel={noteMessageListUserScrollIntent}
+        onTouchMove={noteMessageListUserScrollIntent}
+        onPointerDown={noteMessageListUserScrollIntent}
+      >
         {messages.length === 0 && (
           <div className="empty-state">
             <Sparkles size={22} />
@@ -987,7 +1129,6 @@ function ChatView({
             onRefreshSuggestions={(id) => void refreshSuggestions(id)}
           />
         ))}
-        <div ref={messageEndRef} />
       </div>
 
       {messages.length > 0 && <QuickActionGrid actions={QUICK_ACTIONS} compact disabled={busy} onAction={runQuickAction} />}
@@ -1404,38 +1545,63 @@ function normalizeThinkingMode(value?: string): ThinkingMode {
   return "default";
 }
 
-function SettingsView({ setError, onAuthRequired }: { setError: (value: string | null) => void; onAuthRequired: () => void }) {
+function SettingsView({
+  setError,
+  onAuthRequired,
+  themePreference,
+  resolvedTheme,
+  onThemePreferenceChange,
+  onThemePreferencePersisted,
+  onLogout,
+  logoutPending
+}: {
+  setError: (value: string | null) => void;
+  onAuthRequired: () => void;
+  themePreference: ThemePreference;
+  resolvedTheme: ResolvedTheme;
+  onThemePreferenceChange: (value: ThemePreference) => void;
+  onThemePreferencePersisted: (value: ThemePreference) => void;
+  onLogout: () => void;
+  logoutPending: boolean;
+}) {
   const [apiBaseValue, setApiBaseValue] = useState("");
   const [models, setModels] = useState<ModelSettings | null>(null);
   const [loading, setLoading] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
+  const persistedThemeRef = useRef<ThemePreference>(themePreference);
 
   useEffect(() => {
     Promise.all([getApiBase(), getModelSettings()])
       .then(([base, modelSettings]) => {
+        const nextThemePreference = normalizeThemePreference(modelSettings.theme);
         setApiBaseValue(base);
-        setModels(modelSettings);
+        setModels({ ...modelSettings, theme: nextThemePreference });
+        persistedThemeRef.current = nextThemePreference;
+        onThemePreferencePersisted(nextThemePreference);
       })
       .catch((error) => {
         if (isAuthRequiredError(error)) onAuthRequired();
         else setError(error instanceof Error ? error.message : "加载设置失败");
       });
-  }, [setError]);
+  }, [onAuthRequired, onThemePreferencePersisted, setError]);
 
   function resetModels() {
-    setModels((value) => value && {
-      ...value,
+    if (!models) return;
+    setModels({
+      ...models,
+      theme: "default",
       text_summary_model: null,
       conversation_model: null,
       xiaohongshu_model: null,
       short_video_script_model: null,
       suggested_questions_model: null,
-      text_summary_thinking_mode: normalizeThinkingMode(value.defaults.text_summary_thinking_mode),
-      conversation_thinking_mode: normalizeThinkingMode(value.defaults.conversation_thinking_mode),
-      xiaohongshu_thinking_mode: normalizeThinkingMode(value.defaults.xiaohongshu_thinking_mode),
-      short_video_script_thinking_mode: normalizeThinkingMode(value.defaults.short_video_script_thinking_mode),
-      suggested_questions_thinking_mode: normalizeThinkingMode(value.defaults.suggested_questions_thinking_mode)
+      text_summary_thinking_mode: normalizeThinkingMode(models.defaults.text_summary_thinking_mode),
+      conversation_thinking_mode: normalizeThinkingMode(models.defaults.conversation_thinking_mode),
+      xiaohongshu_thinking_mode: normalizeThinkingMode(models.defaults.xiaohongshu_thinking_mode),
+      short_video_script_thinking_mode: normalizeThinkingMode(models.defaults.short_video_script_thinking_mode),
+      suggested_questions_thinking_mode: normalizeThinkingMode(models.defaults.suggested_questions_thinking_mode)
     });
+    onThemePreferenceChange("default");
   }
 
   function updateModelField(key: ModelSettingKey, nextValue: string) {
@@ -1444,6 +1610,11 @@ function SettingsView({ setError, onAuthRequired }: { setError: (value: string |
 
   function updateThinkingMode(key: ThinkingModeKey, nextValue: ThinkingMode) {
     setModels((value) => value && { ...value, [key]: nextValue });
+  }
+
+  function updateThemePreference(nextValue: ThemePreference) {
+    setModels((value) => value && { ...value, theme: nextValue });
+    onThemePreferenceChange(nextValue);
   }
 
   async function saveSettings() {
@@ -1459,15 +1630,24 @@ function SettingsView({ setError, onAuthRequired }: { setError: (value: string |
     setSavedAt(null);
     try {
       await setApiBase(apiBaseValue);
-      setModels(await updateModelSettings(models));
+      const nextSettings = await updateModelSettings(models);
+      const nextThemePreference = normalizeThemePreference(nextSettings.theme);
+      setModels({ ...nextSettings, theme: nextThemePreference });
+      persistedThemeRef.current = nextThemePreference;
+      onThemePreferencePersisted(nextThemePreference);
       setSavedAt(new Date().toLocaleTimeString());
     } catch (error) {
+      const persistedThemePreference = persistedThemeRef.current;
+      setModels((value) => value && { ...value, theme: persistedThemePreference });
+      onThemePreferenceChange(persistedThemePreference);
       if (isAuthRequiredError(error)) onAuthRequired();
       else setError(error instanceof Error ? error.message : "保存设置失败");
     } finally {
       setLoading(false);
     }
   }
+
+  const currentThemePreference = normalizeThemePreference(models?.theme ?? themePreference);
 
   return (
     <section className="settings-layout">
@@ -1482,6 +1662,33 @@ function SettingsView({ setError, onAuthRequired }: { setError: (value: string |
           后端地址
           <input value={apiBaseValue} onChange={(event) => setApiBaseValue(event.target.value)} placeholder="http://127.0.0.1:8000" />
         </label>
+      </div>
+
+      <div className="settings-section">
+        <div className="section-heading">
+          <div>
+            <strong>外观</strong>
+            <span>{currentThemePreference === "default" ? `跟随系统：${resolvedTheme === "dark" ? "深色" : "浅色"}` : "使用固定主题"}</span>
+          </div>
+        </div>
+        <div className="theme-toggle" aria-label="外观主题">
+          {THEME_OPTIONS.map((option) => {
+            const Icon = option.icon;
+            const active = currentThemePreference === option.value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                className={active ? "active" : ""}
+                onClick={() => updateThemePreference(option.value)}
+                disabled={!models}
+              >
+                <Icon size={15} />
+                {option.label}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       <div className="settings-section">
@@ -1504,29 +1711,48 @@ function SettingsView({ setError, onAuthRequired }: { setError: (value: string |
                   onChange={(event) => updateModelField(row.modelKey, event.target.value)}
                 />
               </label>
-              <div className="thinking-toggle" role="group" aria-label={`${row.label}思考模式`}>
-                {THINKING_MODE_OPTIONS.map((option) => (
-                  <button
-                    key={option.value}
-                    type="button"
-                    className={thinkingMode === option.value ? "active" : ""}
-                    onClick={() => updateThinkingMode(row.thinkingKey, option.value)}
-                    disabled={!models}
-                  >
-                    {option.label}
-                  </button>
-                ))}
+              <div className="thinking-mode-row">
+                <span className="thinking-mode-label">深度思考</span>
+                <div className="thinking-toggle" role="group" aria-label={`${row.label}深度思考模式`}>
+                  {THINKING_MODE_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className={thinkingMode === option.value ? "active" : ""}
+                      title={option.title}
+                      onClick={() => updateThinkingMode(row.thinkingKey, option.value)}
+                      disabled={!models}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
           );
         })}
       </div>
 
-      <button className="primary-button" onClick={() => void saveSettings()} disabled={loading || !models}>
-        {loading ? <Loader2 className="spin" size={16} /> : <Save size={16} />}
-        保存设置
-      </button>
-      {savedAt && <div className="save-state"><Check size={15} />已在 {savedAt} 保存</div>}
+      <div className="settings-actions">
+        <button className="primary-button" onClick={() => void saveSettings()} disabled={loading || !models}>
+          {loading ? <Loader2 className="spin" size={16} /> : <Save size={16} />}
+          保存设置
+        </button>
+        {savedAt && <div className="save-state"><Check size={15} />已在 {savedAt} 保存</div>}
+      </div>
+
+      <div className="settings-section settings-account-section">
+        <div className="section-heading">
+          <div>
+            <strong>账户</strong>
+            <span>需要时再重新登录即可。</span>
+          </div>
+        </div>
+        <button className="settings-logout-button" type="button" onClick={onLogout} disabled={logoutPending}>
+          {logoutPending ? <Loader2 className="spin" size={16} /> : <LogOut size={16} />}
+          退出登录
+        </button>
+      </div>
     </section>
   );
 }

@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from app.core.config import ThinkingMode
 
 ArtifactSource = Literal["screenshot", "page_text", "selection", "upload"]
+ThemePreference = Literal["default", "light", "dark"]
 
 
 class UserPublic(BaseModel):
@@ -133,6 +134,7 @@ class ConversationDetail(ConversationSummary):
 
 
 class ModelSettingsRequest(BaseModel):
+    theme: ThemePreference = "default"
     text_summary_model: str | None = Field(default=None, max_length=120)
     conversation_model: str | None = Field(default=None, max_length=120)
     xiaohongshu_model: str | None = Field(default=None, max_length=120)
@@ -147,6 +149,7 @@ class ModelSettingsRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
+                "theme": "default",
                 "text_summary_model": "dashscope/qwen3.5-flash",
                 "conversation_model": "dashscope/qwen3.5-flash",
                 "xiaohongshu_model": "dashscope/qwen3.5-flash",

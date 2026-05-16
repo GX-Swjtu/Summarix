@@ -217,16 +217,17 @@ export async function updateModelSettings(payload: Partial<ModelSettings>): Prom
   return request<ModelSettings>("/api/settings/models", {
     method: "PUT",
     body: JSON.stringify({
-      text_summary_model: payload.text_summary_model || null,
-      conversation_model: payload.conversation_model || null,
-      xiaohongshu_model: payload.xiaohongshu_model || null,
-      short_video_script_model: payload.short_video_script_model || null,
-      suggested_questions_model: payload.suggested_questions_model || null,
-      text_summary_thinking_mode: payload.text_summary_thinking_mode || "default",
-      conversation_thinking_mode: payload.conversation_thinking_mode || "default",
-      xiaohongshu_thinking_mode: payload.xiaohongshu_thinking_mode || "default",
-      short_video_script_thinking_mode: payload.short_video_script_thinking_mode || "default",
-      suggested_questions_thinking_mode: payload.suggested_questions_thinking_mode || "disabled"
+      theme: payload.theme ?? "default",
+      text_summary_model: payload.text_summary_model?.trim() || null,
+      conversation_model: payload.conversation_model?.trim() || null,
+      xiaohongshu_model: payload.xiaohongshu_model?.trim() || null,
+      short_video_script_model: payload.short_video_script_model?.trim() || null,
+      suggested_questions_model: payload.suggested_questions_model?.trim() || null,
+      text_summary_thinking_mode: payload.text_summary_thinking_mode ?? "default",
+      conversation_thinking_mode: payload.conversation_thinking_mode ?? "default",
+      xiaohongshu_thinking_mode: payload.xiaohongshu_thinking_mode ?? "default",
+      short_video_script_thinking_mode: payload.short_video_script_thinking_mode ?? "default",
+      suggested_questions_thinking_mode: payload.suggested_questions_thinking_mode ?? "disabled"
     })
   });
 }
