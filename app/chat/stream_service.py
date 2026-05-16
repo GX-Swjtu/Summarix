@@ -576,7 +576,7 @@ async def stream_chat_response(
     session.add(assistant_message)
     await session.commit()
     yield {"event": "persisted", "data": json.dumps({"assistant_message_id": assistant_message.id}, ensure_ascii=False)}
+    yield {"event": "done", "data": assistant_message.id}
     if request.suggested_questions:
         async for event in stream_suggested_questions_for_conversation(session, user_id, conversation, settings):
             yield event
-    yield {"event": "done", "data": assistant_message.id}

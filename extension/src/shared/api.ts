@@ -282,6 +282,7 @@ export async function streamChat(options: {
   onConversation: (payload: { id: string; user_message_id?: string; reference_artifacts?: Artifact[] }) => void;
   onAdkEvent: (event: AdkEvent) => void;
   onPersisted?: (payload: { assistant_message_id?: string }) => void;
+  onDone?: () => void;
   onSuggestedQuestions?: (payload: SuggestedQuestionsPayload) => void;
 }): Promise<void> {
   const response = await fetchStreamResponse("/api/chat/stream", {
@@ -303,6 +304,7 @@ export async function streamChat(options: {
     }
     if (event === "adk_event") options.onAdkEvent(JSON.parse(data) as AdkEvent);
     if (event === "persisted") options.onPersisted?.(JSON.parse(data) as { assistant_message_id?: string });
+    if (event === "done") options.onDone?.();
     if (event === "suggested_questions") options.onSuggestedQuestions?.(JSON.parse(data) as SuggestedQuestionsPayload);
     if (event === "error") throw new Error(data || "AI 响应失败");
   });

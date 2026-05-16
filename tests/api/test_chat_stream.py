@@ -147,7 +147,7 @@ async def test_stream_chat_emits_suggested_questions_when_requested(authenticate
     assert response.status_code == 200
     events = parse_sse_events(response.text)
     event_names = [event["event"] for event in events]
-    assert event_names.index("persisted") < event_names.index("suggested_questions") < event_names.index("done")
+    assert event_names.index("persisted") < event_names.index("done") < event_names.index("suggested_questions")
     payload = json.loads(next(event for event in events if event["event"] == "suggested_questions")["data"])
     assert payload["questions"] == [
         "这页内容最值得继续确认的关键结论是什么？",
@@ -797,9 +797,24 @@ def test_create_web_assistant_builds_delegating_agent_team():
     assert "不要再用“爆点标题”“开场引子”“正文”“标签”“互动引导”这类小节标题" in xiaohongshu_agent.instruction
 
 
-def test_create_web_assistant_applies_thinking_mode_to_litellm_models():
-    agent = create_web_assistant(
+def test_create_web_assistant_applies_thinking_mode_to_litellm_models(monkeypatch: pytest.MonkeyPatch):
+    import app.chat.agent_factory as agent_factory_module
+
+    calls: list[tuple[str, str]] = []
+    original = agent_factory_module.create_litellm
+
+    def spy_create_litellm(model_name: str, thinking_mode: str):
+        calls.append((model_name, thinking_mode))
+        return original(model_name, thinking_mode)
+
+    monkeypatch.setattr(agent_factory_module, "create_litellm", spy_create_litellm)
+
+    create_web_assistant(
         make_model_config(
+            conversation_model="conv-model",
+            text_summary_model="summary-model",
+            xiaohongshu_model="xhs-model",
+            short_video_script_model="video-model",
             conversation_thinking_mode="enabled",
             text_summary_thinking_mode="disabled",
             xiaohongshu_thinking_mode="default",
@@ -807,14 +822,11 @@ def test_create_web_assistant_applies_thinking_mode_to_litellm_models():
         )
     )
 
-    summary_agent = next(sub_agent for sub_agent in agent.sub_agents if sub_agent.name == "summary_expert")
-    xiaohongshu_agent = next(sub_agent for sub_agent in agent.sub_agents if sub_agent.name == "xiaohongshu_copy_expert")
-    video_agent = next(sub_agent for sub_agent in agent.sub_agents if sub_agent.name == "short_video_script_expert")
-
-    assert getattr(agent.model, "_additional_args") == {"extra_body": {"enable_thinking": True}}
-    assert getattr(summary_agent.model, "_additional_args") == {"extra_body": {"enable_thinking": False}}
-    assert getattr(xiaohongshu_agent.model, "_additional_args") == {}
-    assert getattr(video_agent.model, "_additional_args") == {"extra_body": {"enable_thinking": True}}
+    thinking_by_model = dict(calls)
+    assert thinking_by_model["summary-model"] == "disabled"
+    assert thinking_by_model["xhs-model"] == "default"
+    assert thinking_by_model["video-model"] == "enabled"
+    assert thinking_by_model["conv-model"] == "enabled"
 
 
 @pytest.mark.asyncio

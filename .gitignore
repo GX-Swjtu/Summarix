@@ -16,3 +16,6 @@ wheels/
 # Frontend dependencies and build output
 extension/node_modules/
 extension/dist/
+
+# IDE and editor settings
+.idea/

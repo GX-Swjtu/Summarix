@@ -1219,6 +1219,29 @@ textarea:focus {
   }
 }
 
+@media (max-width: 430px) {
+  .quick-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .context-mode-row {
+    justify-content: stretch;
+  }
+
+  .context-mode-toggle {
+    width: 100%;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .history-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .history-list {
+    max-height: 190px;
+  }
+}
+
 @keyframes typing {
   0%,
   80%,

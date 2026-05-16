@@ -3,9 +3,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
+from app.core.config import ThinkingMode
 
 ArtifactSource = Literal["screenshot", "page_text", "selection", "upload"]
-ThinkingMode = Literal["default", "enabled", "disabled"]
 
 
 class UserPublic(BaseModel):

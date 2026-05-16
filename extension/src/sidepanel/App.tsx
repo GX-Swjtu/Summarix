@@ -865,6 +865,11 @@ function ChatView({
           persistedAssistantId = payload.assistant_message_id;
           setMessages((items) => items.map((item) => (item.id === assistantId ? { ...item, id: payload.assistant_message_id || item.id } : item)));
         },
+        onDone: () => {
+          setSending(false);
+          finishSuggestions(assistantId, persistedAssistantId);
+          setContextSendMode("followup");
+        },
         onSuggestedQuestions: (payload) => {
           applySuggestedQuestions(assistantId, payload.questions, persistedAssistantId);
         }
