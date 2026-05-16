@@ -1,0 +1,105 @@
+services:
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    environment:
+      SUMMARIX_METRICS_TARGET: ${SUMMARIX_METRICS_TARGET:-summarix-backend:8000}
+      LANGWATCH_APP_METRICS_TARGET: ${LANGWATCH_APP_METRICS_TARGET:-langwatch-app:5560}
+      LANGWATCH_WORKERS_METRICS_TARGET: ${LANGWATCH_WORKERS_METRICS_TARGET:-langwatch-workers:2999}
+      LANGWATCH_METRICS_API_KEY: ${METRICS_API_KEY:-please-change-me}
+    entrypoint:
+      - /bin/sh
+      - -c
+    command:
+      - |
+        sed \
+          -e "s|__SUMMARIX_METRICS_TARGET__|$${SUMMARIX_METRICS_TARGET:-summarix-backend:8000}|g" \
+          -e "s|__LANGWATCH_APP_METRICS_TARGET__|$${LANGWATCH_APP_METRICS_TARGET:-langwatch-app:5560}|g" \
+          -e "s|__LANGWATCH_WORKERS_METRICS_TARGET__|$${LANGWATCH_WORKERS_METRICS_TARGET:-langwatch-workers:2999}|g" \
+          -e "s|__LANGWATCH_METRICS_API_KEY__|$${LANGWATCH_METRICS_API_KEY:-please-change-me}|g" \
+          /etc/prometheus/prometheus.yml > /tmp/prometheus.yml
+        exec /bin/prometheus --config.file=/tmp/prometheus.yml --storage.tsdb.path=/prometheus --web.enable-lifecycle
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts:/etc/prometheus/alerts:ro
+      - ../data/plg/prometheus:/prometheus
+    networks:
+      - summarix-observability
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:3.3.2
+    command: ["-config.file=/etc/loki/loki-config.yml"]
+    ports:
+      - "${LOKI_PORT:-3100}:3100"
+    volumes:
+      - ./loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - ../data/plg/loki:/loki
+    networks:
+      - summarix-observability
+    restart: unless-stopped
+
+  promtail:
+    image: grafana/promtail:3.3.2
+    command: ["-config.file=/etc/promtail/promtail-config.yaml"]
+    volumes:
+      - ./promtail/promtail-config.yaml:/etc/promtail/promtail-config.yaml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - summarix-observability
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-please-change-me}
+      GF_USERS_DEFAULT_THEME: light
+      LANGWATCH_PUBLIC_URL: ${LANGWATCH_PUBLIC_URL:-http://localhost:5560}
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - ../data/plg/grafana:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+      - loki
+    networks:
+      - summarix-observability
+    restart: unless-stopped
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    profiles:
+      - host-metrics
+    command:
+      - --path.rootfs=/host
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+    networks:
+      - summarix-observability
+    restart: unless-stopped
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    profiles:
+      - host-metrics
+    privileged: true
+    devices:
+      - /dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    networks:
+      - summarix-observability
+    restart: unless-stopped
+
+networks:
+  summarix-observability:
+    name: summarix-observability

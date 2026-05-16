@@ -1,14 +1,17 @@
+import json
 import re
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 LOCAL_EXTENSION_ORIGIN_REGEX = r"^(chrome-extension://[a-p]{32}|moz-extension://[0-9a-fA-F-]{36})$"
 ThinkingMode = Literal["default", "enabled", "disabled"]
+LogFormat = Literal["text", "json"]
+LangWatchOutputGuardrailMode = Literal["audit", "block"]
 
 
 class Settings(BaseSettings):
@@ -16,9 +19,13 @@ class Settings(BaseSettings):
 
     app_name: str = "Summarix"
     app_env: str = "local"
+    app_reload: bool | None = None
     api_prefix: str = "/api"
     host: str = "127.0.0.1"
     port: int = 8000
+    log_format: LogFormat = "text"
+    log_level: str = "INFO"
+    trace_id_header: str = "X-Trace-ID"
 
     database_url: str = Field(..., min_length=1)
     database_auto_create_database: bool = True
@@ -35,13 +42,13 @@ class Settings(BaseSettings):
     auth_cookie_samesite: Literal["lax", "strict", "none"] = "lax"
     auth_cookie_domain: str | None = None
 
-    cors_allow_origins: list[str] = Field(
+    cors_allow_origins: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: [
             "http://localhost:5173",
             "http://127.0.0.1:5173",
         ]
     )
-    browser_extension_origins: list[str] = Field(default_factory=list)
+    browser_extension_origins: Annotated[list[str], NoDecode] = Field(default_factory=list)
     cors_allow_origin_regex: str | None = None
 
     chat_app_name: str = "summarix"
@@ -61,11 +68,43 @@ class Settings(BaseSettings):
     suggested_questions_thinking_mode: ThinkingMode = "disabled"
     adk_database_url: str | None = None
 
+    prometheus_enabled: bool = False
+    prometheus_metrics_path: str = "/metrics"
+
+    langwatch_enabled: bool = False
+    langwatch_api_key: str | None = None
+    langwatch_endpoint: str | None = None
+    langwatch_public_url: str | None = None
+    langwatch_debug: bool = False
+    langwatch_guardrails_enabled: bool = False
+    langwatch_guardrails_fail_open: bool = True
+    langwatch_input_guardrail_slug: str | None = None
+    langwatch_output_guardrail_mode: LangWatchOutputGuardrailMode = "audit"
+    langwatch_prompts_enabled: bool = False
+    langwatch_chat_prompt_handle: str | None = None
+
     @field_validator("cors_allow_origins", "browser_extension_origins", mode="before")
     @classmethod
     def parse_cors_origin_list(cls, value: str | list[str]) -> list[str]:
         if isinstance(value, str):
-            return [item.strip() for item in value.split(",") if item.strip()]
+            value = value.strip()
+            if not value:
+                return []
+
+            if value.startswith("[") and value.endswith("]"):
+                inner = value[1:-1].strip()
+                if not inner:
+                    return []
+
+                try:
+                    parsed = json.loads(value)
+                except json.JSONDecodeError:
+                    return [item.strip().strip('"').strip("'") for item in inner.split(",") if item.strip()]
+
+                if isinstance(parsed, list):
+                    return [str(item).strip() for item in parsed if str(item).strip()]
+
+            return [item.strip().strip('"').strip("'") for item in value.split(",") if item.strip()]
         return value
 
     @field_validator("cors_allow_origin_regex")
@@ -84,6 +123,11 @@ class Settings(BaseSettings):
         if any(pattern.fullmatch(origin) for origin in extension_origins):
             raise ValueError("请使用 BROWSER_EXTENSION_ORIGINS 配置明确的浏览器插件来源")
         return value
+
+    @field_validator("log_level")
+    @classmethod
+    def normalize_log_level(cls, value: str) -> str:
+        return value.upper()
 
     @model_validator(mode="after")
     def validate_security_settings(self) -> "Settings":
@@ -116,6 +160,12 @@ class Settings(BaseSettings):
         if self.app_env.lower() not in {"local", "development", "dev"}:
             return None
         return LOCAL_EXTENSION_ORIGIN_REGEX
+
+    @property
+    def should_reload(self) -> bool:
+        if self.app_reload is not None:
+            return self.app_reload
+        return self.app_env.lower() in {"local", "development", "dev"}
 
     @property
     def effective_adk_database_url(self) -> str:

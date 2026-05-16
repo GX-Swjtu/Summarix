@@ -2,6 +2,8 @@ import type {
   AdkEvent,
   Artifact,
   ConversationDetail,
+  FeedbackRating,
+  FeedbackResponse,
   HistoryPage,
   ModelSettings,
   PageContext,
@@ -232,6 +234,24 @@ export async function updateModelSettings(payload: Partial<ModelSettings>): Prom
   });
 }
 
+export async function submitFeedback(payload: {
+  messageId: string;
+  rating: FeedbackRating;
+  traceId?: string | null;
+  comment?: string | null;
+}): Promise<FeedbackResponse> {
+  return request<FeedbackResponse>("/api/feedback", {
+    method: "POST",
+    body: JSON.stringify({
+      message_id: payload.messageId,
+      rating: payload.rating,
+      trace_id: payload.traceId || null,
+      comment: payload.comment?.trim() || null,
+      source: "extension"
+    })
+  });
+}
+
 async function consumeSseResponse(response: Response, onEvent: (event: string | undefined, data: string) => Promise<void> | void): Promise<void> {
   if (!response.ok) {
     throw new ResponseError(response.status, await readErrorDetail(response, response.statusText || "流式请求失败"));
@@ -280,9 +300,9 @@ export async function streamChat(options: {
   artifactIds?: string[];
   signal?: AbortSignal;
   suggestedQuestions?: boolean;
-  onConversation: (payload: { id: string; user_message_id?: string; reference_artifacts?: Artifact[] }) => void;
+  onConversation: (payload: { id: string; user_message_id?: string; trace_id?: string; reference_artifacts?: Artifact[] }) => void;
   onAdkEvent: (event: AdkEvent) => void;
-  onPersisted?: (payload: { assistant_message_id?: string }) => void;
+  onPersisted?: (payload: { assistant_message_id?: string; trace_id?: string; adk_invocation_id?: string | null }) => void;
   onDone?: () => void;
   onSuggestedQuestions?: (payload: SuggestedQuestionsPayload) => void;
 }): Promise<void> {
@@ -300,11 +320,11 @@ export async function streamChat(options: {
 
   await consumeSseResponse(response, async (event, data) => {
     if (event === "conversation") {
-      const payload = JSON.parse(data) as { id: string; user_message_id?: string; reference_artifacts?: Artifact[] };
+      const payload = JSON.parse(data) as { id: string; user_message_id?: string; trace_id?: string; reference_artifacts?: Artifact[] };
       options.onConversation(payload);
     }
     if (event === "adk_event") options.onAdkEvent(JSON.parse(data) as AdkEvent);
-    if (event === "persisted") options.onPersisted?.(JSON.parse(data) as { assistant_message_id?: string });
+    if (event === "persisted") options.onPersisted?.(JSON.parse(data) as { assistant_message_id?: string; trace_id?: string; adk_invocation_id?: string | null });
     if (event === "done") options.onDone?.();
     if (event === "suggested_questions") options.onSuggestedQuestions?.(JSON.parse(data) as SuggestedQuestionsPayload);
     if (event === "error") throw new Error(data || "AI 响应失败");

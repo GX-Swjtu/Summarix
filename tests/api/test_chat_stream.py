@@ -107,6 +107,7 @@ async def test_stream_chat_returns_sse_and_records_messages(authenticated_client
     )
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.headers["x-trace-id"]
     body = response.text
     assert "event: conversation" in body
     assert "event: adk_event" in body
@@ -120,12 +121,20 @@ async def test_stream_chat_returns_sse_and_records_messages(authenticated_client
     conversation_payload = json.loads(conversation["data"])
     assert conversation_payload["id"]
     assert conversation_payload["user_message_id"]
+    assert conversation_payload["trace_id"]
     adk_event = next(event for event in events if event["event"] == "adk_event")
     adk_payload = json.loads(adk_event["data"])
     assert adk_payload["content"]["parts"][0]["text"]
     assert adk_payload["turnComplete"] is True
     persisted = next(event for event in events if event["event"] == "persisted")
-    assert json.loads(persisted["data"])["assistant_message_id"]
+    persisted_payload = json.loads(persisted["data"])
+    assert persisted_payload["assistant_message_id"]
+    assert persisted_payload["trace_id"] == conversation_payload["trace_id"]
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(Message).where(Message.conversation_id == conversation_payload["id"]).order_by(Message.created_at))
+        messages = result.scalars().all()
+    assert [message.trace_id for message in messages] == [conversation_payload["trace_id"], conversation_payload["trace_id"]]
 
 
 @pytest.mark.asyncio

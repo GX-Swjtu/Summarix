@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "level-up": {
+      "source": "langwatch/skills",
+      "sourceType": "github",
+      "skillPath": "level-up/SKILL.md",
+      "computedHash": "cd78a46e06d392b9b9c2da83c6563957b5c8654d9e6e04a71a1acaa5e50e4317"
+    }
+  }
+}

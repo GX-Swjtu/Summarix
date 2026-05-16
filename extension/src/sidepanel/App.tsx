@@ -26,6 +26,8 @@ import {
   Sparkles,
   Square,
   Sun,
+  ThumbsDown,
+  ThumbsUp,
   Wand2,
   X
 } from "lucide-react";
@@ -51,6 +53,7 @@ import {
   setApiBase,
   streamChat,
   streamSuggestedQuestions,
+  submitFeedback,
   updateModelSettings,
   uploadArtifact
 } from "../shared/api";
@@ -61,6 +64,7 @@ import type {
   ConversationDetail,
   ConversationSummary,
   ExtractedPage,
+  FeedbackRating,
   MessageAttachment,
   ModelSettings,
   ResolvedTheme,
@@ -77,11 +81,21 @@ type LocalMessage = {
   id: string;
   role: "user" | "assistant" | string;
   content: string;
+  persisted?: boolean;
+  traceId?: string | null;
+  adkInvocationId?: string | null;
   thought?: string;
   thoughtOpen?: boolean;
   artifacts?: MessageAttachment[];
   suggestedQuestions?: string[];
   suggestionsLoading?: boolean;
+  feedback?: {
+    id?: string;
+    rating: FeedbackRating | null;
+    pending?: boolean;
+    error?: string | null;
+    langwatchSyncStatus?: string;
+  };
 };
 
 type DraftAttachment = {
@@ -721,7 +735,19 @@ function ChatView({
         id: message.id,
         role: message.role,
         content: message.content,
-        artifacts: message.artifacts || []
+        persisted: true,
+        traceId: message.trace_id || null,
+        adkInvocationId: message.adk_invocation_id || null,
+        artifacts: message.artifacts || [],
+        feedback: message.feedback
+          ? {
+            id: message.feedback.id,
+            rating: message.feedback.rating,
+            pending: false,
+            error: null,
+            langwatchSyncStatus: message.feedback.langwatch_sync_status
+          }
+          : undefined
       }))
     );
     if (resumeConversation.page_url || resumeConversation.page_title) {
@@ -904,10 +930,13 @@ function ChatView({
     const thoughtText = getEventText(event, true);
     const turnComplete = getTurnComplete(event);
     const isPartial = event.partial === true;
+    const invocationId = event.invocationId || event.invocation_id || null;
     if (!answerText && !thoughtText && !turnComplete) return;
     setMessages((items) => items.map((item) => {
       if (item.id !== assistantId) return item;
       const next = { ...item };
+      if (invocationId && !next.adkInvocationId) next.adkInvocationId = invocationId;
+      if (event.trace_id && !next.traceId) next.traceId = event.trace_id;
       if (answerText) {
         next.content = appendEventText(next.content, answerText, isPartial);
       }
@@ -921,6 +950,47 @@ function ChatView({
       }
       return next;
     }));
+  }
+
+  async function handleFeedback(messageId: string, rating: FeedbackRating) {
+    const target = messages.find((message) => message.id === messageId);
+    if (!target || target.role !== "assistant" || target.persisted === false) return;
+    const previous = target.feedback;
+    setError(null);
+    setMessages((items) => items.map((item) => (
+      item.id === messageId
+        ? { ...item, feedback: { ...item.feedback, rating, pending: true, error: null } }
+        : item
+    )));
+    try {
+      const response = await submitFeedback({
+        messageId,
+        rating,
+        traceId: target.traceId || target.adkInvocationId || null
+      });
+      setMessages((items) => items.map((item) => (
+        item.id === messageId
+          ? {
+            ...item,
+            traceId: response.trace_id || item.traceId || null,
+            feedback: {
+              id: response.id,
+              rating: response.rating,
+              pending: false,
+              error: response.langwatch_sync_error || null,
+              langwatchSyncStatus: response.langwatch_sync_status
+            }
+          }
+          : item
+      )));
+    } catch (error) {
+      setMessages((items) => items.map((item) => (item.id === messageId ? { ...item, feedback: previous } : item)));
+      if (isAuthRequiredError(error)) {
+        onAuthRequired();
+      } else {
+        setError(error instanceof Error ? error.message : "反馈提交失败");
+      }
+    }
   }
 
   function getEffectiveContextSendMode(contextMode?: ContextSendMode): ContextSendMode {
@@ -966,13 +1036,14 @@ function ChatView({
         id: makeLocalId(),
         role: "user",
         content: text,
+        persisted: false,
         artifacts: [...(pageReference ? [pageReference] : []), ...uploadedArtifacts]
       };
       enableAutoScrollOnNextRender("smooth");
       setMessages((items) => [
         ...items.map((item) => (item.role === "assistant" ? { ...item, suggestedQuestions: undefined, suggestionsLoading: false } : item)),
         userMessage,
-        { id: assistantId, role: "assistant", content: "", suggestionsLoading: true }
+        { id: assistantId, role: "assistant", content: "", persisted: false, suggestionsLoading: true }
       ]);
       setInput("");
       setDrafts([]);
@@ -989,8 +1060,12 @@ function ChatView({
               ? {
                 ...item,
                 id: payload.user_message_id || item.id,
+                persisted: Boolean(payload.user_message_id),
+                traceId: payload.trace_id || item.traceId || null,
                 artifacts: mergeReferenceArtifacts(item.artifacts, payload.reference_artifacts || [])
               }
+              : item.id === assistantId
+                ? { ...item, traceId: payload.trace_id || item.traceId || null }
               : item
           )));
         },
@@ -998,7 +1073,17 @@ function ChatView({
         onPersisted: (payload) => {
           if (!payload.assistant_message_id) return;
           persistedAssistantId = payload.assistant_message_id;
-          setMessages((items) => items.map((item) => (item.id === assistantId ? { ...item, id: payload.assistant_message_id || item.id } : item)));
+          setMessages((items) => items.map((item) => (
+            item.id === assistantId
+              ? {
+                ...item,
+                id: payload.assistant_message_id || item.id,
+                persisted: true,
+                traceId: payload.trace_id || item.traceId || null,
+                adkInvocationId: payload.adk_invocation_id || item.adkInvocationId || null
+              }
+              : item
+          )));
         },
         onDone: () => {
           setSending(false);
@@ -1127,6 +1212,7 @@ function ChatView({
             onToggleThought={toggleThought}
             onAskSuggestedQuestion={(question) => void sendPrompt(question, { contextMode: "followup" })}
             onRefreshSuggestions={(id) => void refreshSuggestions(id)}
+            onFeedback={(id, rating) => void handleFeedback(id, rating)}
           />
         ))}
       </div>
@@ -1245,18 +1331,21 @@ function MessageBubble({
   streaming = false,
   onToggleThought,
   onAskSuggestedQuestion,
-  onRefreshSuggestions
+  onRefreshSuggestions,
+  onFeedback
 }: {
   message: LocalMessage;
   streaming?: boolean;
   onToggleThought?: (id: string) => void;
   onAskSuggestedQuestion?: (question: string) => void;
   onRefreshSuggestions?: (id: string) => void;
+  onFeedback?: (id: string, rating: FeedbackRating) => void;
 }) {
   const hasThought = Boolean(message.thought?.trim());
   const suggestedQuestions = message.suggestedQuestions || [];
   const [copied, setCopied] = useState(false);
   const roleClass = message.role === "user" ? "user" : "assistant";
+  const feedbackDisabled = streaming || message.persisted === false || message.feedback?.pending;
 
   async function copyMessage() {
     await copyText(message.content);
@@ -1290,6 +1379,28 @@ function MessageBubble({
             {message.thoughtOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
             思考
           </button>
+        )}
+        {roleClass === "assistant" && message.content.trim() && (
+          <>
+            <button
+              type="button"
+              className={`ghost-action feedback-action${message.feedback?.rating === "like" ? " active" : ""}`}
+              title="这条回答有帮助"
+              disabled={feedbackDisabled}
+              onClick={() => onFeedback?.(message.id, "like")}
+            >
+              <ThumbsUp size={13} />
+            </button>
+            <button
+              type="button"
+              className={`ghost-action feedback-action${message.feedback?.rating === "dislike" ? " active" : ""}`}
+              title="这条回答需要改进"
+              disabled={feedbackDisabled}
+              onClick={() => onFeedback?.(message.id, "dislike")}
+            >
+              <ThumbsDown size={13} />
+            </button>
+          </>
         )}
       </div>
       {hasThought && roleClass === "assistant" && message.thoughtOpen && (
@@ -1522,7 +1633,24 @@ function HistoryView({
                 {detail.messages.map((message) => (
                   <MessageBubble
                     key={message.id}
-                    message={{ id: message.id, role: message.role, content: message.content, artifacts: message.artifacts || [] }}
+                    message={{
+                      id: message.id,
+                      role: message.role,
+                      content: message.content,
+                      persisted: true,
+                      traceId: message.trace_id || null,
+                      adkInvocationId: message.adk_invocation_id || null,
+                      artifacts: message.artifacts || [],
+                      feedback: message.feedback
+                        ? {
+                          id: message.feedback.id,
+                          rating: message.feedback.rating,
+                          pending: false,
+                          error: null,
+                          langwatchSyncStatus: message.feedback.langwatch_sync_status
+                        }
+                        : undefined
+                    }}
                   />
                 ))}
               </div>

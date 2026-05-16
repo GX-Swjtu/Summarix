@@ -1,0 +1,49 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 30s
+
+rule_files:
+  - /etc/prometheus/alerts/*.rules.yml
+
+scrape_configs:
+  - job_name: summarix-backend
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - __SUMMARIX_METRICS_TARGET__
+        labels:
+          service: summarix-backend
+
+  - job_name: langwatch-app
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials: __LANGWATCH_METRICS_API_KEY__
+    static_configs:
+      - targets:
+          - __LANGWATCH_APP_METRICS_TARGET__
+        labels:
+          service: langwatch-app
+
+  - job_name: langwatch-workers
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - __LANGWATCH_WORKERS_METRICS_TARGET__
+        labels:
+          service: langwatch-workers
+
+  - job_name: prometheus
+    static_configs:
+      - targets:
+          - localhost:9090
+
+  - job_name: node-exporter
+    static_configs:
+      - targets:
+          - node-exporter:9100
+
+  - job_name: cadvisor
+    static_configs:
+      - targets:
+          - cadvisor:8080

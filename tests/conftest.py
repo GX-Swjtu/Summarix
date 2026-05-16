@@ -11,6 +11,7 @@ os.environ["JWT_SECRET_KEY"] = "test-secret-with-at-least-thirty-two-bytes"
 os.environ["CHAT_AGENT_MODE"] = "mock"
 os.environ["CHAT_ARTIFACT_ROOT"] = ".data/test-artifacts"
 
+import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
@@ -18,6 +19,15 @@ from app.api.app import create_app
 from app.core.config import get_settings
 from app.db.init import create_all_tables, drop_all_tables
 from app.db.session import engine
+
+
+@pytest.fixture(autouse=True)
+def reset_langwatch_initialized():
+    """每个测试前后重置 LangWatch 全局单例，防止跨测试状态泄漏。"""
+    import app.monitoring.langwatch as lw_module
+    lw_module._langwatch_initialized = False
+    yield
+    lw_module._langwatch_initialized = False
 
 
 @pytest_asyncio.fixture(autouse=True)

@@ -1,0 +1,29 @@
+services:
+  summarix-backend:
+    image: ${SUMMARIX_BACKEND_IMAGE:-summarix-backend:latest}
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-}
+        UV_INDEX_URL: ${UV_INDEX_URL:-}
+    env_file:
+      - path: ../../.env
+        required: false
+      - path: ../runtime/monitoring.generated.env
+        required: false
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8000
+      APP_RELOAD: "false"
+    ports:
+      - "${SUMMARIX_BACKEND_PORT:-8000}:8000"
+    volumes:
+      - ../data/backend/artifacts:/app/.data/artifacts
+    networks:
+      - summarix-observability
+    restart: unless-stopped
+
+networks:
+  summarix-observability:
+    name: summarix-observability

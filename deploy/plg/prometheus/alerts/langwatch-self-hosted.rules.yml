@@ -1,0 +1,73 @@
+groups:
+  - name: langwatch-self-hosted
+    interval: 30s
+    rules:
+      - alert: LangWatchAppDown
+        expr: up{job="langwatch-app"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          team: summarix
+        annotations:
+          summary: "LangWatch App 已连续 5 分钟不可达"
+          description: "Prometheus 无法抓取 langwatch-app 的 /metrics，请检查 LangWatch 应用容器与网络。"
+
+      - alert: LangWatchWorkersDown
+        expr: up{job="langwatch-workers"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          team: summarix
+        annotations:
+          summary: "LangWatch Workers 已连续 5 分钟不可达"
+          description: "Prometheus 无法抓取 langwatch-workers 的 /metrics，请检查 workers 容器是否正常运行。"
+
+      - alert: LangWatchWorkerQueueBacklogWarning
+        expr: max(gq_fastq_pending) > 10000
+        for: 5m
+        labels:
+          severity: warning
+          team: summarix
+        annotations:
+          summary: "LangWatch worker 队列积压超过 10000"
+          description: "队列深度为 {{ $value }}，说明 trace 处理可能开始积压，需要关注 workers 负载。"
+
+      - alert: LangWatchWorkerQueueBacklogCritical
+        expr: max(gq_fastq_pending) > 100000
+        for: 5m
+        labels:
+          severity: critical
+          team: summarix
+        annotations:
+          summary: "LangWatch worker 队列积压超过 100000"
+          description: "队列深度为 {{ $value }}，trace 处理已经严重滞后，应立即扩容或排查阻塞。"
+
+      - alert: LangWatchAppHighErrorRate
+        expr: |
+          (
+            sum by (job) (rate(http_request_duration_seconds_count{job="langwatch-app", status_code=~"5.."}[5m]))
+              /
+            sum by (job) (rate(http_request_duration_seconds_count{job="langwatch-app"}[5m]))
+          ) > 0.05
+          and sum by (job) (rate(http_request_duration_seconds_count{job="langwatch-app"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+          team: summarix
+        annotations:
+          summary: "LangWatch App 5xx 比例超过 5%"
+          description: "过去 5 分钟 LangWatch App 的 5xx 比例超过 5%，需要检查应用日志、数据库和 ClickHouse 状态。"
+
+      - alert: LangWatchClickHouseQueryP95High
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(clickhouse_query_duration_seconds_bucket[5m]))
+          ) > 2
+        for: 10m
+        labels:
+          severity: warning
+          team: summarix
+        annotations:
+          summary: "LangWatch ClickHouse 查询 P95 超过 2 秒"
+          description: "ClickHouse 查询延迟持续升高，可能会影响 LangWatch 页面与 trace 查询体验。"

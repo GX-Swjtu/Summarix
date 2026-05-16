@@ -12,6 +12,7 @@ from app.chat.stream_service import stream_chat_response, stream_suggested_quest
 from app.core.config import Settings, get_settings
 from app.db.models import MessageArtifact, User
 from app.db.session import get_db_session
+from app.monitoring.trace_context import new_trace_id
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -102,7 +103,11 @@ async def stream_chat(
     session: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ) -> EventSourceResponse:
-    return EventSourceResponse(stream_chat_response(session, current_user.id, payload, settings))
+    trace_id = new_trace_id()
+    return EventSourceResponse(
+        stream_chat_response(session, current_user.id, payload, settings, trace_id=trace_id),
+        headers={settings.trace_id_header: trace_id},
+    )
 
 
 @router.post("/suggestions/stream")

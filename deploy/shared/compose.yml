@@ -1,0 +1,40 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${SUMMARIX_POSTGRES_DB:-summarix}
+      POSTGRES_USER: ${SUMMARIX_POSTGRES_USER:-summarix}
+      POSTGRES_PASSWORD: ${SUMMARIX_POSTGRES_PASSWORD:-summarix}
+    ports:
+      - "${SUMMARIX_POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - ../data/postgres:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - summarix-observability
+    restart: unless-stopped
+
+  redis:
+    image: redis:alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${SUMMARIX_REDIS_PORT:-6379}:6379"
+    volumes:
+      - ../data/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - summarix-observability
+    restart: unless-stopped
+
+networks:
+  summarix-observability:
+    name: summarix-observability

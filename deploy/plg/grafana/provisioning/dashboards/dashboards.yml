@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: Summarix
+    orgId: 1
+    folder: Summarix
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards

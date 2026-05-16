@@ -630,6 +630,21 @@ textarea:focus {
   color: var(--user-muted);
 }
 
+.feedback-action {
+  width: 24px;
+  justify-content: center;
+}
+
+.feedback-action.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.feedback-action:disabled {
+  opacity: 0.58;
+  cursor: default;
+}
+
 .thought-content {
   margin-top: 8px;
   padding: 8px;

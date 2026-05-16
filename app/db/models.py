@@ -32,6 +32,7 @@ class User(Base):
     conversations: Mapped[list[Conversation]] = relationship(back_populates="user", cascade="all, delete-orphan")
     refresh_tokens: Mapped[list[RefreshToken]] = relationship(back_populates="user", cascade="all, delete-orphan")
     model_preference: Mapped[UserModelPreference | None] = relationship(back_populates="user", cascade="all, delete-orphan")
+    message_feedback: Mapped[list[MessageFeedback]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
 
 class RefreshToken(Base):
@@ -63,6 +64,7 @@ class Conversation(Base):
     user: Mapped[User] = relationship(back_populates="conversations")
     messages: Mapped[list[Message]] = relationship(back_populates="conversation", cascade="all, delete-orphan", order_by="Message.created_at")
     artifacts: Mapped[list[MessageArtifact]] = relationship(back_populates="conversation")
+    feedback_items: Mapped[list[MessageFeedback]] = relationship(back_populates="conversation", cascade="all, delete-orphan")
 
 
 class Message(Base):
@@ -72,11 +74,13 @@ class Message(Base):
     conversation_id: Mapped[str] = mapped_column(ForeignKey("conversations.id", ondelete="CASCADE"), index=True, nullable=False)
     role: Mapped[str] = mapped_column(String(30), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    trace_id: Mapped[str | None] = mapped_column(String(120), index=True, nullable=True)
     adk_invocation_id: Mapped[str | None] = mapped_column(String(120), index=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
 
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
     artifacts: Mapped[list[MessageArtifact]] = relationship(back_populates="message")
+    feedback_items: Mapped[list[MessageFeedback]] = relationship(back_populates="message", cascade="all, delete-orphan")
 
 
 class MessageArtifact(Base):
@@ -97,6 +101,7 @@ class MessageArtifact(Base):
     text_excerpt: Mapped[str | None] = mapped_column(Text, nullable=True)
     text_length: Mapped[int | None] = mapped_column(Integer, nullable=True)
     content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    trace_id: Mapped[str | None] = mapped_column(String(120), index=True, nullable=True)
     adk_invocation_id: Mapped[str | None] = mapped_column(String(120), index=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
 
@@ -125,3 +130,28 @@ class UserModelPreference(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
 
     user: Mapped[User] = relationship(back_populates="model_preference")
+
+
+class MessageFeedback(Base):
+    __tablename__ = "message_feedback"
+    __table_args__ = (UniqueConstraint("user_id", "message_id", name="uq_message_feedback_user_message"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    conversation_id: Mapped[str] = mapped_column(ForeignKey("conversations.id", ondelete="CASCADE"), index=True, nullable=False)
+    message_id: Mapped[str] = mapped_column(ForeignKey("messages.id", ondelete="CASCADE"), index=True, nullable=False)
+    trace_id: Mapped[str | None] = mapped_column(String(120), index=True, nullable=True)
+    adk_invocation_id: Mapped[str | None] = mapped_column(String(120), index=True, nullable=True)
+    rating: Mapped[str] = mapped_column(String(20), nullable=False)
+    score: Mapped[int] = mapped_column(Integer, nullable=False)
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source: Mapped[str] = mapped_column(String(40), nullable=False, default="extension")
+    langwatch_annotation_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    langwatch_sync_status: Mapped[str] = mapped_column(String(30), nullable=False, default="disabled")
+    langwatch_sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+    user: Mapped[User] = relationship(back_populates="message_feedback")
+    conversation: Mapped[Conversation] = relationship(back_populates="feedback_items")
+    message: Mapped[Message] = relationship(back_populates="feedback_items")

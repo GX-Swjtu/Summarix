@@ -9,9 +9,12 @@ wheels/
 # Virtual environments
 .venv
 .env
+.env.api.key
 
 # Local runtime data
 .data/
+deploy/data/
+deploy/runtime/
 
 # Frontend dependencies and build output
 extension/node_modules/

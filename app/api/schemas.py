@@ -7,6 +7,7 @@ from app.core.config import ThinkingMode
 
 ArtifactSource = Literal["screenshot", "page_text", "selection", "upload"]
 ThemePreference = Literal["default", "light", "dark"]
+FeedbackRating = Literal["like", "dislike"]
 
 
 class UserPublic(BaseModel):
@@ -97,7 +98,19 @@ class ArtifactResponse(BaseModel):
     text_excerpt: str | None = None
     text_length: int | None = None
     content_hash: str | None = None
+    trace_id: str | None = None
     adk_invocation_id: str | None = None
+
+
+class MessageFeedbackPublic(BaseModel):
+    id: str
+    rating: FeedbackRating
+    score: int
+    comment: str | None = None
+    trace_id: str | None = None
+    langwatch_sync_status: str
+    created_at: datetime
+    updated_at: datetime
 
 
 class MessagePublic(BaseModel):
@@ -106,9 +119,11 @@ class MessagePublic(BaseModel):
     id: str
     role: Literal["user", "assistant"] | str
     content: str
+    trace_id: str | None = None
     adk_invocation_id: str | None = None
     created_at: datetime
     artifacts: list[ArtifactResponse] = Field(default_factory=list)
+    feedback: MessageFeedbackPublic | None = None
 
 
 class ConversationSummary(BaseModel):
@@ -171,3 +186,35 @@ class ModelSettingsResponse(ModelSettingsRequest):
 
 class ErrorResponse(BaseModel):
     detail: str
+
+
+class FeedbackRequest(BaseModel):
+    message_id: str
+    rating: FeedbackRating
+    trace_id: str | None = Field(default=None, max_length=120)
+    comment: str | None = Field(default=None, max_length=2000)
+    source: str = Field(default="extension", max_length=40)
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "message_id": "62cdb617-711b-4db2-a813-855d2b9e0112",
+                "rating": "like",
+                "trace_id": "4f2c3c8f2a7b4b86a6cc4e9f5b3c9b81",
+                "comment": "回答准确，结构清楚。",
+                "source": "extension",
+            }
+        }
+    )
+
+
+class FeedbackResponse(BaseModel):
+    id: str
+    message_id: str
+    rating: FeedbackRating
+    score: int
+    trace_id: str | None = None
+    langwatch_synced: bool
+    langwatch_sync_status: str
+    langwatch_annotation_id: str | None = None
+    langwatch_sync_error: str | None = None

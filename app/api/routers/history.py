@@ -4,8 +4,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_current_user
-from app.api.schemas import ArtifactResponse, ConversationDetail, ConversationSummary, HistoryPage, MessagePublic
-from app.db.models import Conversation, Message, User
+from app.api.schemas import ArtifactResponse, ConversationDetail, ConversationSummary, HistoryPage, MessageFeedbackPublic, MessagePublic
+from app.db.models import Conversation, Message, MessageFeedback, User
 from app.db.session import get_db_session
 
 router = APIRouter(prefix="/history", tags=["history"])
@@ -24,7 +24,23 @@ def artifact_response(artifact) -> ArtifactResponse:
         text_excerpt=artifact.text_excerpt,
         text_length=artifact.text_length,
         content_hash=artifact.content_hash,
+        trace_id=artifact.trace_id,
         adk_invocation_id=artifact.adk_invocation_id,
+    )
+
+
+def feedback_response(feedback: MessageFeedback | None) -> MessageFeedbackPublic | None:
+    if feedback is None:
+        return None
+    return MessageFeedbackPublic(
+        id=feedback.id,
+        rating=feedback.rating,  # type: ignore[arg-type]
+        score=feedback.score,
+        comment=feedback.comment,
+        trace_id=feedback.trace_id,
+        langwatch_sync_status=feedback.langwatch_sync_status,
+        created_at=feedback.created_at,
+        updated_at=feedback.updated_at,
     )
 
 
@@ -68,6 +84,13 @@ async def get_history_detail(
     conversation = result.scalar_one_or_none()
     if conversation is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="会话不存在")
+    message_ids = [message.id for message in conversation.messages]
+    feedback_by_message_id: dict[str, MessageFeedback] = {}
+    if message_ids:
+        feedback_result = await session.execute(
+            select(MessageFeedback).where(MessageFeedback.user_id == current_user.id, MessageFeedback.message_id.in_(message_ids))
+        )
+        feedback_by_message_id = {item.message_id: item for item in feedback_result.scalars().all()}
     return ConversationDetail(
         id=conversation.id,
         title=conversation.title,
@@ -79,9 +102,11 @@ async def get_history_detail(
                 id=message.id,
                 role=message.role,
                 content=message.content,
+                trace_id=message.trace_id,
                 adk_invocation_id=message.adk_invocation_id,
                 created_at=message.created_at,
                 artifacts=[artifact_response(artifact) for artifact in message.artifacts],
+                feedback=feedback_response(feedback_by_message_id.get(message.id)),
             )
             for message in conversation.messages
         ],

@@ -25,6 +25,31 @@ export type Artifact = {
   adk_invocation_id?: string | null;
 };
 
+export type FeedbackRating = "like" | "dislike";
+
+export type MessageFeedback = {
+  id: string;
+  rating: FeedbackRating;
+  score: number;
+  comment?: string | null;
+  trace_id?: string | null;
+  langwatch_sync_status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type FeedbackResponse = {
+  id: string;
+  message_id: string;
+  rating: FeedbackRating;
+  score: number;
+  trace_id?: string | null;
+  langwatch_synced: boolean;
+  langwatch_sync_status: string;
+  langwatch_annotation_id?: string | null;
+  langwatch_sync_error?: string | null;
+};
+
 export type MessageAttachment = Artifact & {
   previewUrl?: string;
 };
@@ -33,9 +58,11 @@ export type Message = {
   id: string;
   role: "user" | "assistant" | string;
   content: string;
+  trace_id?: string | null;
   adk_invocation_id?: string | null;
   created_at: string;
   artifacts?: Artifact[];
+  feedback?: MessageFeedback | null;
 };
 
 export type ConversationSummary = {
@@ -72,6 +99,7 @@ export type AdkEvent = {
   author?: string;
   invocationId?: string;
   invocation_id?: string;
+  trace_id?: string;
   content?: {
     role?: string;
     parts?: AdkPart[];
