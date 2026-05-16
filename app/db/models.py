@@ -115,6 +115,8 @@ class UserModelPreference(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    primary_model_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    primary_thinking_mode: Mapped[str] = mapped_column(String(20), nullable=False, default="default")
     text_summary_model: Mapped[str | None] = mapped_column(String(120), nullable=True)
     conversation_model: Mapped[str | None] = mapped_column(String(120), nullable=True)
     xiaohongshu_model: Mapped[str | None] = mapped_column(String(120), nullable=True)

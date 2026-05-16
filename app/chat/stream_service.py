@@ -15,8 +15,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.schemas import ChatStreamRequest, SuggestedQuestionsStreamRequest
 from app.chat.agent_factory import WebAssistantModelConfig, build_litellm_kwargs
 from app.chat.artifacts import get_artifact_service, save_page_text_artifact
-from app.chat.runner import create_runner, get_adk_session_service
-from app.core.config import Settings, get_settings
+from app.chat.runner import get_adk_session_service, get_or_create_runner
+from app.core.config import ChatModelDefinition, Settings, get_settings, normalize_thinking_mode
 from app.db.init import ensure_database_exists
 from app.db.models import Conversation, Message, MessageArtifact, UserModelPreference
 from app.monitoring.langwatch import evaluate_input_guardrail, get_langwatch_trace_id, maybe_langwatch_trace
@@ -90,25 +90,50 @@ async def get_or_create_conversation(session: AsyncSession, user_id: str, reques
 async def load_model_config(session: AsyncSession, user_id: str, settings: Settings) -> WebAssistantModelConfig:
     result = await session.execute(select(UserModelPreference).where(UserModelPreference.user_id == user_id))
     preference = result.scalar_one_or_none()
-    return WebAssistantModelConfig(
-        conversation_model=(preference.conversation_model if preference else None) or settings.effective_conversation_model,
-        text_summary_model=(preference.text_summary_model if preference else None) or settings.effective_text_model,
-        xiaohongshu_model=(preference.xiaohongshu_model if preference else None) or settings.effective_xiaohongshu_model,
-        short_video_script_model=(preference.short_video_script_model if preference else None)
-        or settings.effective_short_video_script_model,
-        suggested_questions_model=(preference.suggested_questions_model if preference else None)
-        or settings.effective_suggested_questions_model,
-        conversation_thinking_mode=(preference.conversation_thinking_mode if preference else None)
-        or settings.conversation_thinking_mode,
-        text_summary_thinking_mode=(preference.text_summary_thinking_mode if preference else None)
-        or settings.text_summary_thinking_mode,
-        xiaohongshu_thinking_mode=(preference.xiaohongshu_thinking_mode if preference else None)
-        or settings.xiaohongshu_thinking_mode,
-        short_video_script_thinking_mode=(preference.short_video_script_thinking_mode if preference else None)
-        or settings.short_video_script_thinking_mode,
-        suggested_questions_thinking_mode=(preference.suggested_questions_thinking_mode if preference else None)
-        or settings.suggested_questions_thinking_mode,
+    primary_model = resolve_primary_model_definition(preference, settings)
+    primary_thinking_mode = resolve_primary_thinking_mode(preference, primary_model)
+    suggested_model = settings.effective_suggested_questions_model_definition
+    suggested_thinking_mode = normalize_thinking_mode(
+        settings.effective_suggested_questions_thinking_mode,
+        suggested_model.default_thinking_mode,
     )
+    if not suggested_model.supports_thinking_config:
+        suggested_thinking_mode = "default"
+    return WebAssistantModelConfig(
+        conversation_model=primary_model.litellm_model,
+        text_summary_model=primary_model.litellm_model,
+        xiaohongshu_model=primary_model.litellm_model,
+        short_video_script_model=primary_model.litellm_model,
+        suggested_questions_model=suggested_model.litellm_model,
+        conversation_thinking_mode=primary_thinking_mode,
+        text_summary_thinking_mode=primary_thinking_mode,
+        xiaohongshu_thinking_mode=primary_thinking_mode,
+        short_video_script_thinking_mode=primary_thinking_mode,
+        suggested_questions_thinking_mode=suggested_thinking_mode,
+        primary_model_id=primary_model.id,
+        primary_api_base=primary_model.api_base,
+        primary_api_key=primary_model.api_key,
+        suggested_questions_model_id=suggested_model.id,
+        suggested_questions_api_base=suggested_model.api_base,
+        suggested_questions_api_key=suggested_model.api_key,
+    )
+
+
+def resolve_primary_model_definition(preference: UserModelPreference | None, settings: Settings) -> ChatModelDefinition:
+    if preference is not None:
+        model = settings.find_model_definition(preference.primary_model_id)
+        if model is not None:
+            return model
+        model = settings.find_model_definition(preference.conversation_model)
+        if model is not None:
+            return model
+    return settings.effective_primary_model_definition
+
+
+def resolve_primary_thinking_mode(preference: UserModelPreference | None, model: ChatModelDefinition) -> str:
+    if not model.supports_thinking_config:
+        return "default"
+    return normalize_thinking_mode(preference.primary_thinking_mode if preference else None, model.default_thinking_mode)
 
 
 async def load_request_artifacts(session: AsyncSession, user_id: str, artifact_ids: Sequence[str]) -> list[MessageArtifact]:
@@ -442,7 +467,11 @@ async def call_suggested_questions_model(prompt: str, model_config: WebAssistant
                 {"role": "system", "content": "你只输出 JSON 字符串数组，不输出 Markdown 或解释。"},
                 {"role": "user", "content": prompt},
             ],
-            **build_litellm_kwargs(model_config.suggested_questions_thinking_mode),
+            **build_litellm_kwargs(
+                model_config.suggested_questions_thinking_mode,
+                api_base=model_config.suggested_questions_api_base,
+                api_key=model_config.suggested_questions_api_key,
+            ),
         )
         usage = extract_token_usage(response)
         return extract_litellm_response_text(response)
@@ -608,7 +637,7 @@ async def stream_chat_response(
                 else:
                     model_config = await load_model_config(session, user_id, settings)
                     model_name = model_config.conversation_model
-                    runner = create_runner(model_config, settings)
+                    runner = get_or_create_runner(model_config, settings)
                     message_parts = [types.Part.from_text(text=prompt), *await load_artifact_parts(artifacts, settings)]
                     async for event in runner.run_async(
                         user_id=user_id,

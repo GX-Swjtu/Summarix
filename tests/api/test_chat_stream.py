@@ -9,7 +9,7 @@ from google.adk.agents.run_config import StreamingMode
 
 from app.api.schemas import ChatStreamRequest
 from app.chat.agent_factory import WebAssistantModelConfig, build_litellm_kwargs, create_web_assistant
-from app.chat.runner import create_runner, get_adk_session_service
+from app.chat.runner import clear_runner_cache, create_runner, get_adk_session_service, get_or_create_runner
 from app.chat.stream_service import ensure_adk_session, load_model_config, stream_chat_response
 from app.core.config import Settings
 from app.db.models import Conversation, Message, MessageArtifact, User, UserModelPreference
@@ -306,16 +306,41 @@ async def test_stream_chat_uses_single_agent_team_entrypoint_in_adk_mode(monkeyp
         return StubRunner()
 
     monkeypatch.setattr("app.chat.stream_service.ensure_adk_session", fake_ensure_adk_session)
-    monkeypatch.setattr("app.chat.stream_service.create_runner", fake_create_runner)
+    monkeypatch.setattr("app.chat.stream_service.get_or_create_runner", fake_create_runner)
 
     settings = Settings(
         jwt_secret_key="x" * 32,
         database_url="sqlite+aiosqlite:///:memory:",
         chat_agent_mode="adk",
-        text_summary_model="default-text-model",
-        conversation_model="default-conversation-model",
-        xiaohongshu_model="default-xiaohongshu-model",
-        short_video_script_model="default-short-video-script-model",
+        model_catalog_json=json.dumps(
+            [
+                {
+                    "id": "fast",
+                    "name": "Fast",
+                    "description": "快速模型",
+                    "litellm_model": "admin-fast-model",
+                    "supports_thinking_config": True,
+                },
+                {
+                    "id": "premium",
+                    "name": "Premium",
+                    "description": "高级模型",
+                    "api_base": "https://premium.example.com/v1",
+                    "api_key": "premium-secret",
+                    "litellm_model": "admin-premium-model",
+                    "supports_thinking_config": True,
+                },
+                {
+                    "id": "suggestion",
+                    "name": "Suggestion",
+                    "description": "建议模型",
+                    "litellm_model": "admin-suggestion-model",
+                    "supports_thinking_config": False,
+                },
+            ]
+        ),
+        default_primary_model_id="fast",
+        suggested_questions_model_id="suggestion",
     )
 
     async with AsyncSessionLocal() as session:
@@ -326,16 +351,9 @@ async def test_stream_chat_uses_single_agent_team_entrypoint_in_adk_mode(monkeyp
         session.add(
             UserModelPreference(
                 user_id=user.id,
-                text_summary_model="user-text-model",
-                conversation_model="user-conversation-model",
-                xiaohongshu_model="user-xiaohongshu-model",
-                short_video_script_model="user-short-video-script-model",
-                suggested_questions_model="user-suggestion-model",
-                conversation_thinking_mode="enabled",
-                text_summary_thinking_mode="disabled",
-                xiaohongshu_thinking_mode="default",
-                short_video_script_thinking_mode="enabled",
-                suggested_questions_thinking_mode="disabled",
+                primary_model_id="premium",
+                primary_thinking_mode="enabled",
+                suggested_questions_model="legacy-user-suggestion-model",
             )
         )
         await session.commit()
@@ -352,16 +370,20 @@ async def test_stream_chat_uses_single_agent_team_entrypoint_in_adk_mode(monkeyp
 
     assert captured_model_configs == [
         make_model_config(
-            conversation_model="user-conversation-model",
-            text_summary_model="user-text-model",
-            xiaohongshu_model="user-xiaohongshu-model",
-            short_video_script_model="user-short-video-script-model",
-            suggested_questions_model="user-suggestion-model",
+            conversation_model="admin-premium-model",
+            text_summary_model="admin-premium-model",
+            xiaohongshu_model="admin-premium-model",
+            short_video_script_model="admin-premium-model",
+            suggested_questions_model="admin-suggestion-model",
             conversation_thinking_mode="enabled",
-            text_summary_thinking_mode="disabled",
-            xiaohongshu_thinking_mode="default",
+            text_summary_thinking_mode="enabled",
+            xiaohongshu_thinking_mode="enabled",
             short_video_script_thinking_mode="enabled",
-            suggested_questions_thinking_mode="disabled",
+            suggested_questions_thinking_mode="default",
+            primary_model_id="premium",
+            primary_api_base="https://premium.example.com/v1",
+            primary_api_key="premium-secret",
+            suggested_questions_model_id="suggestion",
         )
     ]
     assert any(event["event"] == "done" for event in events)
@@ -408,7 +430,7 @@ async def test_stream_chat_returns_image_unsupported_error_when_image_generation
 
     monkeypatch.setattr("app.chat.stream_service.ensure_adk_session", fake_ensure_adk_session)
     monkeypatch.setattr("app.chat.stream_service.load_artifact_parts", fake_load_artifact_parts)
-    monkeypatch.setattr("app.chat.stream_service.create_runner", lambda *_: FailingRunner())
+    monkeypatch.setattr("app.chat.stream_service.get_or_create_runner", lambda *_: FailingRunner())
 
     settings = Settings(
         jwt_secret_key="x" * 32,
@@ -461,7 +483,7 @@ async def test_stream_chat_keeps_generic_error_when_no_image_artifact(monkeypatc
             yield StubEvent(text="", thought=False, partial=False, final=False, turn_complete=False)
 
     monkeypatch.setattr("app.chat.stream_service.ensure_adk_session", fake_ensure_adk_session)
-    monkeypatch.setattr("app.chat.stream_service.create_runner", lambda *_: FailingRunner())
+    monkeypatch.setattr("app.chat.stream_service.get_or_create_runner", lambda *_: FailingRunner())
 
     settings = Settings(
         jwt_secret_key="x" * 32,
@@ -501,7 +523,7 @@ async def test_stream_chat_falls_back_to_thought_text_when_no_visible_response(m
             yield StubEvent("先整理信息。最终答复。", thought=True, partial=False, final=True, turn_complete=True)
 
     monkeypatch.setattr("app.chat.stream_service.ensure_adk_session", fake_ensure_adk_session)
-    monkeypatch.setattr("app.chat.stream_service.create_runner", lambda model_name, settings: StubRunner())
+    monkeypatch.setattr("app.chat.stream_service.get_or_create_runner", lambda model_config, settings: StubRunner())
 
     settings = Settings(
         jwt_secret_key="x" * 32,
@@ -554,7 +576,7 @@ async def test_stream_chat_enables_adk_sse_streaming_mode(monkeypatch: pytest.Mo
             yield StubEvent("最终答复", thought=False, partial=False, final=True, turn_complete=True)
 
     monkeypatch.setattr("app.chat.stream_service.ensure_adk_session", fake_ensure_adk_session)
-    monkeypatch.setattr("app.chat.stream_service.create_runner", lambda model_name, settings: StubRunner())
+    monkeypatch.setattr("app.chat.stream_service.get_or_create_runner", lambda model_config, settings: StubRunner())
 
     settings = Settings(
         jwt_secret_key="x" * 32,
@@ -600,7 +622,7 @@ async def test_stream_chat_records_adk_invocation_id_on_messages_and_reference(m
             )
 
     monkeypatch.setattr("app.chat.stream_service.ensure_adk_session", fake_ensure_adk_session)
-    monkeypatch.setattr("app.chat.stream_service.create_runner", lambda model_name, settings: StubRunner())
+    monkeypatch.setattr("app.chat.stream_service.get_or_create_runner", lambda model_config, settings: StubRunner())
 
     settings = Settings(
         jwt_secret_key="x" * 32,
@@ -772,6 +794,60 @@ def test_create_runner_uses_model_config(monkeypatch: pytest.MonkeyPatch):
     assert calls["runner_kwargs"]["auto_create_session"] is False
 
 
+def test_get_or_create_runner_reuses_same_model_config(monkeypatch: pytest.MonkeyPatch):
+    clear_runner_cache()
+    calls = {"count": 0}
+
+    class StubRunner:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    def fake_create_web_assistant(model_config: WebAssistantModelConfig):
+        calls["count"] += 1
+        return {"model_config": model_config}
+
+    monkeypatch.setattr("app.chat.runner.create_web_assistant", fake_create_web_assistant)
+    monkeypatch.setattr("app.chat.runner.Runner", StubRunner)
+    monkeypatch.setattr("app.chat.runner.get_adk_session_service", lambda settings: "session-service")
+    monkeypatch.setattr("app.chat.runner.get_artifact_service", lambda: "artifact-service")
+
+    settings = Settings(jwt_secret_key="x" * 32, database_url="sqlite+aiosqlite:///:memory:")
+    model_config = make_model_config(conversation_model="same-model", primary_model_id="same")
+
+    runner_a = get_or_create_runner(model_config, settings)
+    runner_b = get_or_create_runner(make_model_config(conversation_model="same-model", primary_model_id="same"), settings)
+
+    assert runner_a is runner_b
+    assert calls["count"] == 1
+    clear_runner_cache()
+
+
+def test_get_or_create_runner_separates_different_model_configs(monkeypatch: pytest.MonkeyPatch):
+    clear_runner_cache()
+    calls = {"count": 0}
+
+    class StubRunner:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    def fake_create_web_assistant(model_config: WebAssistantModelConfig):
+        calls["count"] += 1
+        return {"model_config": model_config}
+
+    monkeypatch.setattr("app.chat.runner.create_web_assistant", fake_create_web_assistant)
+    monkeypatch.setattr("app.chat.runner.Runner", StubRunner)
+    monkeypatch.setattr("app.chat.runner.get_adk_session_service", lambda settings: "session-service")
+    monkeypatch.setattr("app.chat.runner.get_artifact_service", lambda: "artifact-service")
+
+    settings = Settings(jwt_secret_key="x" * 32, database_url="sqlite+aiosqlite:///:memory:")
+    runner_a = get_or_create_runner(make_model_config(conversation_model="model-a", primary_model_id="a"), settings)
+    runner_b = get_or_create_runner(make_model_config(conversation_model="model-b", primary_model_id="b"), settings)
+
+    assert runner_a is not runner_b
+    assert calls["count"] == 2
+    clear_runner_cache()
+
+
 def test_build_litellm_kwargs_respects_thinking_mode():
     assert build_litellm_kwargs("default") == {}
     assert build_litellm_kwargs("enabled") == {"extra_body": {"enable_thinking": True}}
@@ -812,9 +888,9 @@ def test_create_web_assistant_applies_thinking_mode_to_litellm_models(monkeypatc
     calls: list[tuple[str, str]] = []
     original = agent_factory_module.create_litellm
 
-    def spy_create_litellm(model_name: str, thinking_mode: str):
+    def spy_create_litellm(model_name: str, thinking_mode: str, **kwargs: object):
         calls.append((model_name, thinking_mode))
-        return original(model_name, thinking_mode)
+        return original(model_name, thinking_mode, **kwargs)
 
     monkeypatch.setattr(agent_factory_module, "create_litellm", spy_create_litellm)
 
@@ -843,15 +919,36 @@ async def test_load_model_config_uses_user_preferences_and_defaults():
     settings = Settings(
         jwt_secret_key="x" * 32,
         database_url="sqlite+aiosqlite:///:memory:",
-        text_summary_model="default-text-model",
-        conversation_model="default-conversation-model",
-        xiaohongshu_model="default-xiaohongshu-model",
-        short_video_script_model="default-short-video-script-model",
-        suggested_questions_model="default-suggestion-model",
-        text_summary_thinking_mode="enabled",
-        conversation_thinking_mode="disabled",
-        xiaohongshu_thinking_mode="default",
-        short_video_script_thinking_mode="enabled",
+        model_catalog_json=json.dumps(
+            [
+                {
+                    "id": "fast",
+                    "name": "Fast",
+                    "description": "默认主力",
+                    "litellm_model": "default-primary-model",
+                    "supports_thinking_config": True,
+                    "default_thinking_mode": "disabled",
+                },
+                {
+                    "id": "writer",
+                    "name": "Writer",
+                    "description": "用户主力",
+                    "litellm_model": "user-primary-model",
+                    "supports_thinking_config": True,
+                },
+                {
+                    "id": "suggestion",
+                    "name": "Suggestion",
+                    "description": "建议问题",
+                    "api_base": "https://suggestion.example.com/v1",
+                    "api_key": "suggestion-secret",
+                    "litellm_model": "admin-suggestion-model",
+                    "supports_thinking_config": True,
+                },
+            ]
+        ),
+        default_primary_model_id="fast",
+        suggested_questions_model_id="suggestion",
         suggested_questions_thinking_mode="disabled",
     )
 
@@ -863,14 +960,9 @@ async def test_load_model_config_uses_user_preferences_and_defaults():
         session.add(
             UserModelPreference(
                 user_id=user.id,
-                text_summary_model="user-text-model",
-                conversation_model="user-conversation-model",
-                xiaohongshu_model="user-xiaohongshu-model",
-                short_video_script_model=None,
-                suggested_questions_model="user-suggestion-model",
-                text_summary_thinking_mode="disabled",
-                xiaohongshu_thinking_mode="enabled",
-                suggested_questions_thinking_mode="default",
+                primary_model_id="writer",
+                primary_thinking_mode="enabled",
+                suggested_questions_model="legacy-user-suggestion-model",
             )
         )
         await session.commit()
@@ -878,14 +970,18 @@ async def test_load_model_config_uses_user_preferences_and_defaults():
         model_config = await load_model_config(session, user.id, settings)
 
     assert model_config == make_model_config(
-        conversation_model="user-conversation-model",
-        text_summary_model="user-text-model",
-        xiaohongshu_model="user-xiaohongshu-model",
-        short_video_script_model="default-short-video-script-model",
-        suggested_questions_model="user-suggestion-model",
-        conversation_thinking_mode="default",
-        text_summary_thinking_mode="disabled",
+        conversation_model="user-primary-model",
+        text_summary_model="user-primary-model",
+        xiaohongshu_model="user-primary-model",
+        short_video_script_model="user-primary-model",
+        suggested_questions_model="admin-suggestion-model",
+        conversation_thinking_mode="enabled",
+        text_summary_thinking_mode="enabled",
         xiaohongshu_thinking_mode="enabled",
-        short_video_script_thinking_mode="default",
-        suggested_questions_thinking_mode="default",
+        short_video_script_thinking_mode="enabled",
+        suggested_questions_thinking_mode="disabled",
+        primary_model_id="writer",
+        suggested_questions_model_id="suggestion",
+        suggested_questions_api_base="https://suggestion.example.com/v1",
+        suggested_questions_api_key="suggestion-secret",
     )

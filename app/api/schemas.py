@@ -148,39 +148,35 @@ class ConversationDetail(ConversationSummary):
     artifacts: list[ArtifactResponse]
 
 
+class AvailableModelOption(BaseModel):
+    id: str
+    name: str
+    description: str
+    is_premium: bool = False
+    icon_url: str | None = None
+    supports_thinking_config: bool = False
+    default_thinking_mode: ThinkingMode = "default"
+
+
 class ModelSettingsRequest(BaseModel):
     theme: ThemePreference = "default"
-    text_summary_model: str | None = Field(default=None, max_length=120)
-    conversation_model: str | None = Field(default=None, max_length=120)
-    xiaohongshu_model: str | None = Field(default=None, max_length=120)
-    short_video_script_model: str | None = Field(default=None, max_length=120)
-    suggested_questions_model: str | None = Field(default=None, max_length=120)
-    text_summary_thinking_mode: ThinkingMode = "default"
-    conversation_thinking_mode: ThinkingMode = "default"
-    xiaohongshu_thinking_mode: ThinkingMode = "default"
-    short_video_script_thinking_mode: ThinkingMode = "default"
-    suggested_questions_thinking_mode: ThinkingMode = "disabled"
+    primary_model_id: str | None = Field(default=None, max_length=120)
+    primary_thinking_mode: ThinkingMode = "default"
 
     model_config = ConfigDict(
+        extra="ignore",
         json_schema_extra={
             "example": {
                 "theme": "default",
-                "text_summary_model": "dashscope/qwen3.5-flash",
-                "conversation_model": "dashscope/qwen3.5-flash",
-                "xiaohongshu_model": "dashscope/qwen3.5-flash",
-                "short_video_script_model": "dashscope/qwen3.5-flash",
-                "suggested_questions_model": "dashscope/qwen3.5-flash",
-                "text_summary_thinking_mode": "default",
-                "conversation_thinking_mode": "default",
-                "xiaohongshu_thinking_mode": "default",
-                "short_video_script_thinking_mode": "default",
-                "suggested_questions_thinking_mode": "disabled",
+                "primary_model_id": "qwen-fast",
+                "primary_thinking_mode": "default",
             }
         }
     )
 
 
 class ModelSettingsResponse(ModelSettingsRequest):
+    available_models: list[AvailableModelOption] = Field(default_factory=list)
     defaults: dict[str, str]
 
 

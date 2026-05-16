@@ -1,0 +1,1 @@
+declare const __SUMMARIX_DEFAULT_API_BASE__: string;

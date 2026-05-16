@@ -10,6 +10,7 @@ wheels/
 .venv
 .env
 .env.api.key
+config/model-catalog.json
 
 # Local runtime data
 .data/

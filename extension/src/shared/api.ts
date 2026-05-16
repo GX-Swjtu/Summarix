@@ -8,11 +8,35 @@ import type {
   ModelSettings,
   PageContext,
   SuggestedQuestionsPayload,
+  ThinkingMode,
   User
 } from "./types";
 
 const API_BASE_KEY = "summarix_api_base";
 const USER_CACHE_KEY = "summarix_user";
+const REMEMBERED_AUTH_KEY = "summarix_remembered_auth";
+const MODEL_SELECTION_CACHE_KEY = "summarix_model_selection";
+const FALLBACK_API_BASE = "http://127.0.0.1:8000";
+const COMPILED_DEFAULT_API_BASE = normalizeApiBase(__SUMMARIX_DEFAULT_API_BASE__);
+
+export type CachedModelSelection = {
+  primary_model_id: string | null;
+  primary_thinking_mode: ThinkingMode;
+};
+
+export type RememberedAuth = {
+  email: string;
+  password: string;
+  rememberEmail: boolean;
+  rememberPassword: boolean;
+};
+
+const EMPTY_REMEMBERED_AUTH: RememberedAuth = {
+  email: "",
+  password: "",
+  rememberEmail: true,
+  rememberPassword: false
+};
 
 type RequestOptions = {
   retryAuth?: boolean;
@@ -39,13 +63,88 @@ export function isAuthRequiredError(error: unknown): boolean {
   return error instanceof ResponseError && error.status === 401;
 }
 
+function normalizeApiBase(value: string): string {
+  return value.trim().replace(/\/+$/, "");
+}
+
+function canUseChromeStorage(): boolean {
+  return typeof chrome !== "undefined" && Boolean(chrome.storage?.local);
+}
+
+function normalizeThinkingMode(value: unknown): ThinkingMode {
+  if (value === "enabled" || value === "disabled") return value;
+  return "default";
+}
+
+export function getDefaultApiBase(): string {
+  return COMPILED_DEFAULT_API_BASE || FALLBACK_API_BASE;
+}
+
 export async function getApiBase(): Promise<string> {
   const stored = await chrome.storage.local.get(API_BASE_KEY);
-  return stored[API_BASE_KEY] || "http://127.0.0.1:8000";
+  const apiBase = typeof stored[API_BASE_KEY] === "string" ? normalizeApiBase(stored[API_BASE_KEY] as string) : "";
+  return apiBase || getDefaultApiBase();
 }
 
 export async function setApiBase(value: string): Promise<void> {
-  await chrome.storage.local.set({ [API_BASE_KEY]: value.replace(/\/$/, "") });
+  const normalizedValue = normalizeApiBase(value);
+  await chrome.storage.local.set({ [API_BASE_KEY]: normalizedValue || getDefaultApiBase() });
+}
+
+export async function resetApiBase(): Promise<void> {
+  await chrome.storage.local.remove(API_BASE_KEY);
+}
+
+export async function persistApiBasePreference(value: string): Promise<void> {
+  const normalizedValue = normalizeApiBase(value);
+  if (!normalizedValue || normalizedValue === getDefaultApiBase()) {
+    await resetApiBase();
+    return;
+  }
+  await setApiBase(normalizedValue);
+}
+
+export async function readRememberedAuth(): Promise<RememberedAuth> {
+  const stored = await chrome.storage.local.get(REMEMBERED_AUTH_KEY);
+  const value = stored[REMEMBERED_AUTH_KEY];
+  if (!value || typeof value !== "object") {
+    return { ...EMPTY_REMEMBERED_AUTH };
+  }
+
+  const raw = value as Partial<RememberedAuth>;
+  const rememberPassword = raw.rememberPassword === true && typeof raw.password === "string" && raw.password.length > 0;
+  const rememberEmail = raw.rememberEmail !== false || rememberPassword;
+
+  return {
+    email: rememberEmail && typeof raw.email === "string" ? raw.email : "",
+    password: rememberPassword && typeof raw.password === "string" ? raw.password : "",
+    rememberEmail,
+    rememberPassword
+  };
+}
+
+export async function persistRememberedAuth(value: RememberedAuth): Promise<void> {
+  const rememberPassword = value.rememberPassword && value.password.length > 0;
+  const rememberEmail = value.rememberEmail || rememberPassword;
+  const email = value.email.trim();
+
+  if (!rememberEmail && !rememberPassword) {
+    await chrome.storage.local.remove(REMEMBERED_AUTH_KEY);
+    return;
+  }
+
+  await chrome.storage.local.set({
+    [REMEMBERED_AUTH_KEY]: {
+      email: rememberEmail ? email : "",
+      password: rememberPassword ? value.password : "",
+      rememberEmail,
+      rememberPassword
+    }
+  });
+}
+
+export async function clearRememberedAuth(): Promise<void> {
+  await chrome.storage.local.remove(REMEMBERED_AUTH_KEY);
 }
 
 async function fetchApiResponse(path: string, init: RequestInit = {}): Promise<Response> {
@@ -220,18 +319,43 @@ export async function updateModelSettings(payload: Partial<ModelSettings>): Prom
     method: "PUT",
     body: JSON.stringify({
       theme: payload.theme ?? "default",
-      text_summary_model: payload.text_summary_model?.trim() || null,
-      conversation_model: payload.conversation_model?.trim() || null,
-      xiaohongshu_model: payload.xiaohongshu_model?.trim() || null,
-      short_video_script_model: payload.short_video_script_model?.trim() || null,
-      suggested_questions_model: payload.suggested_questions_model?.trim() || null,
-      text_summary_thinking_mode: payload.text_summary_thinking_mode ?? "default",
-      conversation_thinking_mode: payload.conversation_thinking_mode ?? "default",
-      xiaohongshu_thinking_mode: payload.xiaohongshu_thinking_mode ?? "default",
-      short_video_script_thinking_mode: payload.short_video_script_thinking_mode ?? "default",
-      suggested_questions_thinking_mode: payload.suggested_questions_thinking_mode ?? "disabled"
+      primary_model_id: payload.primary_model_id?.trim() || null,
+      primary_thinking_mode: payload.primary_thinking_mode ?? "default"
     })
   });
+}
+
+export async function readCachedModelSelection(): Promise<CachedModelSelection | null> {
+  try {
+    const raw = canUseChromeStorage()
+      ? (await chrome.storage.local.get(MODEL_SELECTION_CACHE_KEY))[MODEL_SELECTION_CACHE_KEY]
+      : window.localStorage.getItem(MODEL_SELECTION_CACHE_KEY);
+    const value = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!value || typeof value !== "object") return null;
+    const selection = value as Partial<CachedModelSelection>;
+    return {
+      primary_model_id: typeof selection.primary_model_id === "string" && selection.primary_model_id.trim() ? selection.primary_model_id.trim() : null,
+      primary_thinking_mode: normalizeThinkingMode(selection.primary_thinking_mode)
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function cacheModelSelection(selection: CachedModelSelection): Promise<void> {
+  const value: CachedModelSelection = {
+    primary_model_id: selection.primary_model_id?.trim() || null,
+    primary_thinking_mode: normalizeThinkingMode(selection.primary_thinking_mode)
+  };
+  try {
+    if (canUseChromeStorage()) {
+      await chrome.storage.local.set({ [MODEL_SELECTION_CACHE_KEY]: value });
+      return;
+    }
+    window.localStorage.setItem(MODEL_SELECTION_CACHE_KEY, JSON.stringify(value));
+  } catch {
+    return;
+  }
 }
 
 export async function submitFeedback(payload: {

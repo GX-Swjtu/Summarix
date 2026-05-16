@@ -3,7 +3,9 @@ import {
   Camera,
   Check,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
+  ChevronUp,
   Copy,
   FileText,
   History,
@@ -39,8 +41,10 @@ import remarkGfm from "remark-gfm";
 
 import {
   clearCachedUser,
+  clearRememberedAuth,
   getApiBase,
   getArtifactObjectUrl,
+  getDefaultApiBase,
   getHistoryDetail,
   getMe,
   getModelSettings,
@@ -48,9 +52,14 @@ import {
   listHistory,
   login,
   logout,
+  cacheModelSelection,
+  persistApiBasePreference,
+  persistRememberedAuth,
+  readCachedModelSelection,
   readCachedUser,
+  readRememberedAuth,
   register,
-  setApiBase,
+  resetApiBase,
   streamChat,
   streamSuggestedQuestions,
   submitFeedback,
@@ -61,6 +70,7 @@ import type {
   ActiveTabInfo,
   AdkEvent,
   Artifact,
+  AvailableModelOption,
   ConversationDetail,
   ConversationSummary,
   ExtractedPage,
@@ -88,6 +98,7 @@ type LocalMessage = {
   thoughtOpen?: boolean;
   artifacts?: MessageAttachment[];
   suggestedQuestions?: string[];
+  suggestionsVisible?: boolean;
   suggestionsLoading?: boolean;
   feedback?: {
     id?: string;
@@ -130,6 +141,7 @@ const SUGGESTED_QUESTION_COUNT = 3;
 const AUTO_SCROLL_BOTTOM_THRESHOLD = 64;
 const PROGRAMMATIC_SCROLL_LOCK_MS = 400;
 const USER_SCROLL_INTENT_MS = 250;
+const REPOSITORY_URL = "https://github.com/GX-Swjtu/Summarix";
 const QUICK_ACTIONS: QuickAction[] = [
   {
     label: "总结页面",
@@ -172,28 +184,6 @@ const QUICK_ACTIONS: QuickAction[] = [
     prompt: "请基于我们已有上下文，给我 3 个最值得继续追问的问题，并说明它们能帮助我澄清什么。",
     icon: Wand2
   }
-];
-
-type ModelSettingKey =
-  | "text_summary_model"
-  | "conversation_model"
-  | "xiaohongshu_model"
-  | "short_video_script_model"
-  | "suggested_questions_model";
-
-type ThinkingModeKey =
-  | "text_summary_thinking_mode"
-  | "conversation_thinking_mode"
-  | "xiaohongshu_thinking_mode"
-  | "short_video_script_thinking_mode"
-  | "suggested_questions_thinking_mode";
-
-const MODEL_SETTING_ROWS: { label: string; modelKey: ModelSettingKey; thinkingKey: ThinkingModeKey }[] = [
-  { label: "文本总结模型", modelKey: "text_summary_model", thinkingKey: "text_summary_thinking_mode" },
-  { label: "对话模型", modelKey: "conversation_model", thinkingKey: "conversation_thinking_mode" },
-  { label: "小红书文案模型", modelKey: "xiaohongshu_model", thinkingKey: "xiaohongshu_thinking_mode" },
-  { label: "短视频脚本模型", modelKey: "short_video_script_model", thinkingKey: "short_video_script_thinking_mode" },
-  { label: "建议问题模型", modelKey: "suggested_questions_model", thinkingKey: "suggested_questions_thinking_mode" }
 ];
 
 const THINKING_MODE_OPTIONS: { value: ThinkingMode; label: string; title: string }[] = [
@@ -244,6 +234,10 @@ function formatDate(value: string): string {
     hour: "2-digit",
     minute: "2-digit"
   });
+}
+
+function normalizeApiBaseInput(value: string): string {
+  return value.trim().replace(/\/+$/, "");
 }
 
 function pageLengthText(page: ExtractedPage): string {
@@ -325,6 +319,9 @@ export function App({ initialThemePreference = "default" }: { initialThemePrefer
   const [resumeDetail, setResumeDetail] = useState<ConversationDetail | null>(null);
   const [themePreference, setThemePreference] = useState<ThemePreference>(initialThemePreference);
   const [systemTheme, setSystemTheme] = useState<ResolvedTheme>(() => getSystemTheme());
+  const [modelSettings, setModelSettings] = useState<ModelSettings | null>(null);
+  const [modelSettingsLoading, setModelSettingsLoading] = useState(false);
+  const [modelSettingsSaving, setModelSettingsSaving] = useState(false);
   const resolvedTheme = useMemo(() => resolveThemePreference(themePreference, systemTheme), [systemTheme, themePreference]);
 
   const handleAuthRequired = useCallback(async () => {
@@ -332,6 +329,10 @@ export function App({ initialThemePreference = "default" }: { initialThemePrefer
     setUser(null);
     setError("登录状态已失效，请重新登录。");
   }, []);
+
+  const triggerAuthRequired = useCallback(() => {
+    void handleAuthRequired();
+  }, [handleAuthRequired]);
 
   const persistThemePreference = useCallback((nextThemePreference: ThemePreference) => {
     setThemePreference(nextThemePreference);
@@ -352,24 +353,77 @@ export function App({ initialThemePreference = "default" }: { initialThemePrefer
   }, [themePreference]);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user) {
+      setModelSettings(null);
+      return;
+    }
     let active = true;
+    setModelSettingsLoading(true);
+    readCachedModelSelection()
+      .then((cachedSelection) => {
+        if (!active || !cachedSelection) return;
+        setModelSettings((value) => value ?? {
+          theme: themePreference,
+          primary_model_id: cachedSelection.primary_model_id,
+          primary_thinking_mode: cachedSelection.primary_thinking_mode,
+          available_models: [],
+          defaults: {}
+        });
+      })
+      .catch(() => undefined);
     getModelSettings()
       .then((settings) => {
         if (!active) return;
         const nextThemePreference = normalizeThemePreference(settings.theme);
         setThemePreference(nextThemePreference);
+        setModelSettings({ ...settings, theme: nextThemePreference });
         void cacheThemePreference(nextThemePreference);
+        void cacheModelSelection({
+          primary_model_id: settings.primary_model_id || null,
+          primary_thinking_mode: settings.primary_thinking_mode
+        });
       })
       .catch((error) => {
         if (!active) return;
         if (isAuthRequiredError(error)) void handleAuthRequired();
         else setError(error instanceof Error ? error.message : "加载主题设置失败");
+      })
+      .finally(() => {
+        if (active) setModelSettingsLoading(false);
       });
     return () => {
       active = false;
     };
   }, [handleAuthRequired, user]);
+
+  const updatePrimaryModelSelection = useCallback(async (selection: { primary_model_id: string | null; primary_thinking_mode: ThinkingMode }) => {
+    if (!modelSettings || modelSettingsSaving) return false;
+    const previousSettings = modelSettings;
+    const optimisticSettings = {
+      ...modelSettings,
+      primary_model_id: selection.primary_model_id,
+      primary_thinking_mode: selection.primary_thinking_mode
+    };
+    setModelSettings(optimisticSettings);
+    setModelSettingsSaving(true);
+    setError(null);
+    try {
+      const nextSettings = await updateModelSettings(optimisticSettings);
+      setModelSettings(nextSettings);
+      void cacheModelSelection({
+        primary_model_id: nextSettings.primary_model_id || null,
+        primary_thinking_mode: nextSettings.primary_thinking_mode
+      });
+      return true;
+    } catch (error) {
+      setModelSettings(previousSettings);
+      if (isAuthRequiredError(error)) void handleAuthRequired();
+      else setError(error instanceof Error ? error.message : "模型设置保存失败");
+      return false;
+    } finally {
+      setModelSettingsSaving(false);
+    }
+  }, [handleAuthRequired, modelSettings, modelSettingsSaving]);
 
   useEffect(() => {
     let active = true;
@@ -439,7 +493,11 @@ export function App({ initialThemePreference = "default" }: { initialThemePrefer
             resumeConversation={resumeDetail}
             onResumed={() => setResumeDetail(null)}
             setError={setError}
-            onAuthRequired={() => void handleAuthRequired()}
+            onAuthRequired={triggerAuthRequired}
+            modelSettings={modelSettings}
+            modelSettingsLoading={modelSettingsLoading}
+            modelSettingsSaving={modelSettingsSaving}
+            onModelSelectionChange={updatePrimaryModelSelection}
           />
         )}
         {view === "history" && (
@@ -455,7 +513,7 @@ export function App({ initialThemePreference = "default" }: { initialThemePrefer
         {view === "settings" && (
           <SettingsView
             setError={setError}
-            onAuthRequired={() => void handleAuthRequired()}
+            onAuthRequired={triggerAuthRequired}
             themePreference={themePreference}
             resolvedTheme={resolvedTheme}
             onThemePreferenceChange={setThemePreference}
@@ -479,17 +537,60 @@ function LoadingScreen() {
 }
 
 function AuthScreen(props: { onAuthed: (user: User) => void; error: string | null; setError: (value: string | null) => void }) {
+  const defaultApiBase = getDefaultApiBase();
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [apiBaseValue, setApiBaseValue] = useState(defaultApiBase);
+  const [rememberEmail, setRememberEmail] = useState(true);
+  const [rememberPassword, setRememberPassword] = useState(false);
+  const [connectionSettingsOpen, setConnectionSettingsOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    Promise.all([getApiBase(), readRememberedAuth()])
+      .then(([apiBase, remembered]) => {
+        if (!active) return;
+        setApiBaseValue(apiBase);
+        setEmail(remembered.email);
+        setPassword(remembered.password);
+        setRememberEmail(remembered.rememberEmail);
+        setRememberPassword(remembered.rememberPassword);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  async function applyApiBaseSelection(): Promise<boolean> {
+    const normalizedApiBase = normalizeApiBaseInput(apiBaseValue);
+    try {
+      new URL(normalizedApiBase);
+    } catch {
+      props.setError("后端地址需要是完整 URL，例如 http://127.0.0.1:8000");
+      return false;
+    }
+    await persistApiBasePreference(normalizedApiBase);
+    setApiBaseValue(normalizedApiBase || defaultApiBase);
+    return true;
+  }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     props.setError(null);
+    if (!(await applyApiBaseSelection())) return;
+    const normalizedEmail = email.trim();
     setLoading(true);
     try {
-      const nextUser = mode === "login" ? await login(email, password) : await register(email, password);
+      const nextUser = mode === "login" ? await login(normalizedEmail, password) : await register(normalizedEmail, password);
+      await persistRememberedAuth({
+        email: normalizedEmail,
+        password,
+        rememberEmail,
+        rememberPassword
+      });
       props.onAuthed(nextUser);
     } catch (error) {
       props.setError(error instanceof Error ? error.message : "认证失败");
@@ -500,15 +601,55 @@ function AuthScreen(props: { onAuthed: (user: User) => void; error: string | nul
 
   return (
     <div className="auth-shell">
-      <div className="brand-row">
-        <Sparkles size={24} />
-        <strong>Summarix</strong>
-      </div>
-      <form className="auth-form" onSubmit={submit}>
+      <section className="auth-hero auth-hero-compact">
+        <div className="brand-row">
+          <Sparkles size={24} />
+          <strong>Summarix</strong>
+        </div>
         <div className="auth-heading">
           <h1>{mode === "login" ? "欢迎回来" : "创建账号"}</h1>
-          <p>登录后即可同步网页分析、截图问答和历史记录。</p>
+          <p>{mode === "login" ? "登录后即可同步网页分析、截图问答和历史记录。" : "创建账号后即可开始同步网页分析、截图问答和历史记录。"}</p>
         </div>
+      </section>
+      <form className="auth-form auth-card auth-form-card" onSubmit={submit}>
+        <div className="auth-heading">
+          <h2>{mode === "login" ? "登录到你的工作台" : "创建新的工作台账号"}</h2>
+          <p>{mode === "login" ? "默认连接本地后端，只有连接异常时才需要调整设置。" : "先创建账号；如果默认连接不可用，再展开设置修改后端地址。"}</p>
+        </div>
+        <button
+          type="button"
+          className={`auth-settings-toggle${connectionSettingsOpen ? " open" : ""}`}
+          onClick={() => setConnectionSettingsOpen((value) => !value)}
+          aria-expanded={connectionSettingsOpen}
+          aria-controls="auth-connection-settings"
+        >
+          <span className="auth-settings-toggle-copy">
+            <span className="auth-settings-toggle-title"><Settings size={15} />设置</span>
+          </span>
+          {connectionSettingsOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+        </button>
+        {connectionSettingsOpen && (
+          <div className="auth-section" id="auth-connection-settings">
+            <div className="auth-section-heading">
+              <strong>连接设置</strong>
+              <button
+                type="button"
+                onClick={async () => {
+                  props.setError(null);
+                  await resetApiBase();
+                  setApiBaseValue(defaultApiBase);
+                }}
+              >
+                <RotateCcw size={15} />恢复默认
+              </button>
+            </div>
+            <label>
+              后端地址
+              <input value={apiBaseValue} onChange={(event) => setApiBaseValue(event.target.value)} placeholder={defaultApiBase} />
+            </label>
+            <p className="field-hint">编译默认值：{defaultApiBase}</p>
+          </div>
+        )}
         <label>
           邮箱
           <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
@@ -517,34 +658,86 @@ function AuthScreen(props: { onAuthed: (user: User) => void; error: string | nul
           密码
           <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} minLength={8} required />
         </label>
+        <div className="auth-options">
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={rememberEmail}
+              onChange={(event) => {
+                const checked = event.target.checked;
+                setRememberEmail(checked);
+                if (!checked) {
+                  setRememberPassword(false);
+                  void clearRememberedAuth();
+                }
+              }}
+            />
+            记住账号
+          </label>
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={rememberPassword}
+              onChange={(event) => {
+                const checked = event.target.checked;
+                setRememberPassword(checked);
+                if (checked) {
+                  setRememberEmail(true);
+                  return;
+                }
+                void persistRememberedAuth({
+                  email: email.trim(),
+                  password: "",
+                  rememberEmail,
+                  rememberPassword: false
+                });
+              }}
+            />
+            记住密码
+          </label>
+        </div>
+        <p className="field-hint">记住密码后，仅会保存在当前浏览器本地扩展存储中。</p>
         {props.error && <div className="notice inline"><AlertTriangle size={16} />{props.error}</div>}
         <button className="primary-button" type="submit" disabled={loading}>
           {loading ? <Loader2 className="spin" size={16} /> : <LogIn size={16} />}
           {mode === "login" ? "登录" : "注册"}
         </button>
         <div className="auth-actions">
-          <button type="button" onClick={() => setMode(mode === "login" ? "register" : "login")}>
-            {mode === "login" ? "创建账号" : "返回登录"}
+          <button type="button" className="auth-mode-button" onClick={() => setMode(mode === "login" ? "register" : "login")}>
+            {mode === "login" ? "没有账号？创建账号" : "已有账号？返回登录"}
           </button>
           <button
             type="button"
             onClick={async () => {
+              if (!(await applyApiBaseSelection())) return;
               setLoading(true);
               props.setError(null);
               try {
                 const restored = await getMe();
-                if (restored) props.onAuthed(restored);
+                if (restored) {
+                  props.onAuthed(restored);
+                  return;
+                }
+                props.setError("当前没有可继续的登录状态，请直接登录。");
               } catch (error) {
-                props.setError(error instanceof Error ? error.message : "恢复会话失败");
+                props.setError(error instanceof Error ? error.message : "继续上次登录失败");
               } finally {
                 setLoading(false);
               }
             }}
           >
-            恢复会话
+            继续上次登录
           </button>
         </div>
       </form>
+      <p className="auth-footnote">
+        Summarix 是开源项目，源码与部署说明见
+        {" "}
+        <a className="auth-footnote-link" href={REPOSITORY_URL} target="_blank" rel="noreferrer">
+          GitHub
+        </a>
+        。
+      </p>
     </div>
   );
 }
@@ -553,12 +746,20 @@ function ChatView({
   resumeConversation,
   onResumed,
   setError,
-  onAuthRequired
+  onAuthRequired,
+  modelSettings,
+  modelSettingsLoading,
+  modelSettingsSaving,
+  onModelSelectionChange
 }: {
   resumeConversation: ConversationDetail | null;
   onResumed: () => void;
   setError: (value: string | null) => void;
   onAuthRequired: () => void;
+  modelSettings: ModelSettings | null;
+  modelSettingsLoading: boolean;
+  modelSettingsSaving: boolean;
+  onModelSelectionChange: (selection: { primary_model_id: string | null; primary_thinking_mode: ThinkingMode }) => Promise<boolean>;
 }) {
   const [messages, setMessages] = useState<LocalMessage[]>([]);
   const [input, setInput] = useState("");
@@ -573,6 +774,7 @@ function ChatView({
   const [extracting, setExtracting] = useState(false);
   const [capturing, setCapturing] = useState(false);
   const [dragActive, setDragActive] = useState(false);
+  const [modelPickerCloseTick, setModelPickerCloseTick] = useState(0);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const messageListRef = useRef<HTMLDivElement | null>(null);
@@ -598,7 +800,7 @@ function ChatView({
   }, [activeTab?.title, contextNote, extracting, page]);
 
   const hasContext = Boolean(page?.text || drafts.length > 0 || conversationId);
-  const busy = sending || extracting || capturing;
+  const busy = sending || extracting || capturing || modelSettingsSaving;
   const tabLooksChanged = Boolean(page?.url && activeTab?.url && activeTab.url !== page.url);
   const pageNeedsRefresh = contextDirty || tabLooksChanged;
   const shouldAutoAttachFirstPage = !conversationId && messages.length === 0 && Boolean(page) && !pageNeedsRefresh;
@@ -909,17 +1111,28 @@ function ChatView({
 
   function applySuggestedQuestions(assistantId: string, questions: string[], fallbackId?: string) {
     const cleanedQuestions = questions.map((question) => question.trim()).filter(Boolean).slice(0, SUGGESTED_QUESTION_COUNT);
+    setMessages((items) => items.map((item) => {
+      if (item.id !== assistantId && item.id !== fallbackId) return item;
+      return cleanedQuestions.length > 0
+        ? { ...item, suggestedQuestions: cleanedQuestions, suggestionsVisible: true, suggestionsLoading: false }
+        : { ...item, suggestedQuestions: undefined, suggestionsVisible: false, suggestionsLoading: false };
+    }));
+  }
+
+  function revealSuggestionsLoading(assistantId: string, fallbackId?: string) {
     setMessages((items) => items.map((item) => (
       item.id === assistantId || item.id === fallbackId
-        ? { ...item, suggestedQuestions: cleanedQuestions, suggestionsLoading: false }
+        ? { ...item, suggestionsVisible: true, suggestionsLoading: true }
         : item
     )));
   }
 
   function finishSuggestions(assistantId: string, fallbackId?: string) {
-    setMessages((items) => items.map((item) => (
-      item.id === assistantId || item.id === fallbackId ? { ...item, suggestionsLoading: false } : item
-    )));
+    setMessages((items) => items.map((item) => {
+      if (item.id !== assistantId && item.id !== fallbackId) return item;
+      const hasSuggestedQuestions = (item.suggestedQuestions || []).length > 0;
+      return { ...item, suggestionsVisible: hasSuggestedQuestions, suggestionsLoading: false };
+    }));
   }
 
   function applyAdkEvent(assistantId: string, event: AdkEvent) {
@@ -1019,6 +1232,10 @@ function ChatView({
   async function sendPrompt(messageText = input.trim(), options: SendPromptOptions = {}) {
     const text = messageText.trim();
     if (!text || sending) return;
+    if (modelSettingsLoading || modelSettingsSaving) {
+      setError("模型设置正在同步，请稍候再发送");
+      return;
+    }
     setError(null);
     const contextMode = getEffectiveContextSendMode(options.contextMode);
     const requestPage = await resolveRequestPage(contextMode);
@@ -1041,9 +1258,9 @@ function ChatView({
       };
       enableAutoScrollOnNextRender("smooth");
       setMessages((items) => [
-        ...items.map((item) => (item.role === "assistant" ? { ...item, suggestedQuestions: undefined, suggestionsLoading: false } : item)),
+        ...items.map((item) => (item.role === "assistant" ? { ...item, suggestedQuestions: undefined, suggestionsVisible: false, suggestionsLoading: false } : item)),
         userMessage,
-        { id: assistantId, role: "assistant", content: "", persisted: false, suggestionsLoading: true }
+        { id: assistantId, role: "assistant", content: "", persisted: false, suggestionsVisible: false, suggestionsLoading: true }
       ]);
       setInput("");
       setDrafts([]);
@@ -1087,7 +1304,7 @@ function ChatView({
         },
         onDone: () => {
           setSending(false);
-          finishSuggestions(assistantId, persistedAssistantId);
+          revealSuggestionsLoading(assistantId, persistedAssistantId);
           setContextSendMode("followup");
         },
         onSuggestedQuestions: (payload) => {
@@ -1113,7 +1330,7 @@ function ChatView({
   async function refreshSuggestions(messageId: string) {
     if (!conversationId) return;
     setError(null);
-    setMessages((items) => items.map((item) => (item.id === messageId ? { ...item, suggestionsLoading: true } : item)));
+    setMessages((items) => items.map((item) => (item.id === messageId ? { ...item, suggestionsVisible: true, suggestionsLoading: true } : item)));
     try {
       await streamSuggestedQuestions({
         conversationId,
@@ -1266,23 +1483,208 @@ function ChatView({
         <textarea
           ref={textareaRef}
           value={input}
+          onFocus={() => setModelPickerCloseTick((value) => value + 1)}
           onPaste={handlePaste}
           onKeyDown={handleComposerKeyDown}
           onChange={(event) => setInput(event.target.value)}
           placeholder="输入问题，Shift + Enter 换行"
           rows={1}
         />
+        <ModelPicker
+          settings={modelSettings}
+          loading={modelSettingsLoading}
+          saving={modelSettingsSaving}
+          disabled={sending}
+          closeSignal={modelPickerCloseTick}
+          onChange={onModelSelectionChange}
+        />
         {sending ? (
           <button className="icon-button send stop" title="停止生成" onClick={() => abortRef.current?.abort()}>
             <Square size={16} />
           </button>
         ) : (
-          <button className="icon-button send" title="发送" onClick={() => void sendPrompt()} disabled={!input.trim()}>
+          <button className="icon-button send" title="发送" onClick={() => void sendPrompt()} disabled={!input.trim() || modelSettingsLoading || modelSettingsSaving}>
             <Send size={18} />
           </button>
         )}
       </div>
     </section>
+  );
+}
+
+function ModelIcon({ model, size = 18 }: { model?: AvailableModelOption | null; size?: number }) {
+  const [failed, setFailed] = useState(false);
+  return (
+    <span className="model-icon" aria-hidden="true">
+      {model?.icon_url && !failed ? (
+        <img src={model.icon_url} alt="" onError={() => setFailed(true)} />
+      ) : (
+        <Sparkles size={size} />
+      )}
+    </span>
+  );
+}
+
+function ModelPicker({
+  settings,
+  loading,
+  saving,
+  disabled,
+  closeSignal,
+  onChange
+}: {
+  settings: ModelSettings | null;
+  loading: boolean;
+  saving: boolean;
+  disabled: boolean;
+  closeSignal: number;
+  onChange: (selection: { primary_model_id: string | null; primary_thinking_mode: ThinkingMode }) => Promise<boolean>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [detailModelId, setDetailModelId] = useState<string | null>(null);
+  const models = settings?.available_models ?? [];
+  const selectedModel = models.find((model) => model.id === settings?.primary_model_id) ?? models[0] ?? null;
+  const selectedThinkingMode = normalizeThinkingMode(settings?.primary_thinking_mode);
+  const detailModel = detailModelId ? models.find((model) => model.id === detailModelId) ?? null : null;
+  const label = selectedModel?.name || settings?.primary_model_id || "模型";
+  const busy = loading || saving;
+
+  function closeMenu() {
+    setOpen(false);
+    setDetailModelId(null);
+  }
+
+  useEffect(() => {
+    if (closeSignal < 1) return;
+    closeMenu();
+  }, [closeSignal]);
+
+  function toggleMenu() {
+    setOpen((value) => {
+      const nextOpen = !value;
+      if (!nextOpen) setDetailModelId(null);
+      return nextOpen;
+    });
+  }
+
+  async function selectModel(model: AvailableModelOption) {
+    const nextThinkingMode = model.id === settings?.primary_model_id
+      ? selectedThinkingMode
+      : normalizeThinkingMode(model.supports_thinking_config ? model.default_thinking_mode : "default");
+    const saved = await onChange({ primary_model_id: model.id, primary_thinking_mode: nextThinkingMode });
+    if (saved) {
+      closeMenu();
+    }
+  }
+
+  async function selectThinkingMode(model: AvailableModelOption, mode: ThinkingMode) {
+    await onChange({ primary_model_id: model.id, primary_thinking_mode: mode });
+  }
+
+  return (
+    <div className="model-picker">
+      <button
+        type="button"
+        className="model-trigger"
+        title="选择主力模型"
+        onClick={toggleMenu}
+        disabled={disabled || busy || models.length === 0}
+      >
+        {busy ? <Loader2 className="spin" size={15} /> : <ModelIcon model={selectedModel} size={15} />}
+        <span>{label}</span>
+        {open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+      </button>
+      {open && (
+        <div className="model-menu">
+          {detailModel ? (
+            <div className="model-detail-page">
+              <div className="model-detail-header">
+                <button
+                  type="button"
+                  className="model-detail-back"
+                  title="返回模型列表"
+                  onClick={() => setDetailModelId(null)}
+                  disabled={saving}
+                >
+                  <ChevronLeft size={17} />
+                </button>
+                <div className="model-detail-title">
+                  <ModelIcon model={detailModel} size={16} />
+                  <span className="model-detail-copy">
+                    <strong>{detailModel.name}</strong>
+                    <span>{detailModel.description}</span>
+                  </span>
+                </div>
+                {detailModel.id === selectedModel?.id ? (
+                  <span className="model-badge current">当前</span>
+                ) : detailModel.is_premium ? (
+                  <span className="model-badge premium">高级</span>
+                ) : null}
+              </div>
+              {detailModel.id !== selectedModel?.id && (
+                <button type="button" className="model-use-button" onClick={() => void selectModel(detailModel)} disabled={saving}>
+                  <Check size={15} />
+                  使用此模型
+                </button>
+              )}
+              <div className="model-detail-section">
+                <div className="model-detail-section-heading">
+                  <strong>思考模式</strong>
+                </div>
+                {detailModel.supports_thinking_config ? (
+                  <div className="thinking-toggle model-thinking-toggle" role="group" aria-label={`${detailModel.name}思考模式`}>
+                    {THINKING_MODE_OPTIONS.map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        className={detailModel.id === selectedModel?.id && selectedThinkingMode === option.value ? "active" : ""}
+                        title={option.title}
+                        onClick={() => void selectThinkingMode(detailModel, option.value)}
+                        disabled={saving}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="model-fixed-thinking">默认</div>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="model-menu-list">
+              {models.map((model) => {
+                const active = model.id === selectedModel?.id;
+                return (
+                  <div className={`model-menu-row${active ? " active" : ""}`} key={model.id}>
+                    <button type="button" className="model-option" onClick={() => void selectModel(model)} disabled={saving} aria-current={active ? "true" : undefined}>
+                      <ModelIcon model={model} />
+                      <span className="model-option-text">
+                        <strong>{model.name}</strong>
+                        <span>{model.description}</span>
+                      </span>
+                      <span className="model-badges">
+                        {active ? <span className="model-badge current">当前</span> : model.is_premium && <span className="model-badge premium">高级</span>}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="model-detail-button"
+                      title="模型设置"
+                      aria-label={`${model.name}模型设置`}
+                      onClick={() => setDetailModelId(model.id)}
+                      disabled={saving}
+                    >
+                      <ChevronRight size={16} />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1345,6 +1747,7 @@ function MessageBubble({
   const suggestedQuestions = message.suggestedQuestions || [];
   const [copied, setCopied] = useState(false);
   const roleClass = message.role === "user" ? "user" : "assistant";
+  const showSuggestions = roleClass === "assistant" && message.suggestionsVisible && (message.suggestionsLoading || suggestedQuestions.length > 0);
   const feedbackDisabled = streaming || message.persisted === false || message.feedback?.pending;
 
   async function copyMessage() {
@@ -1408,8 +1811,8 @@ function MessageBubble({
           <MarkdownMessage content={message.thought || ""} />
         </div>
       )}
-      {roleClass === "assistant" && (message.suggestionsLoading || suggestedQuestions.length > 0) && (
-        <div className="suggestions-panel">
+      {showSuggestions && (
+        <div className="suggestions-panel" data-state={message.suggestionsLoading ? "loading" : "ready"}>
           <div className="suggestions-header">
             <span><Wand2 size={13} />下一步可以问</span>
             <button
@@ -1421,7 +1824,7 @@ function MessageBubble({
               <RefreshCw className={message.suggestionsLoading ? "spin" : ""} size={13} />
             </button>
           </div>
-          {suggestedQuestions.length > 0 ? (
+          {!message.suggestionsLoading && suggestedQuestions.length > 0 ? (
             <div className="suggestion-chips">
               {suggestedQuestions.map((question) => (
                 <button key={question} type="button" onClick={() => onAskSuggestedQuestion?.(question)}>
@@ -1692,6 +2095,7 @@ function SettingsView({
   onLogout: () => void;
   logoutPending: boolean;
 }) {
+  const defaultApiBase = getDefaultApiBase();
   const [apiBaseValue, setApiBaseValue] = useState("");
   const [models, setModels] = useState<ModelSettings | null>(null);
   const [loading, setLoading] = useState(false);
@@ -1713,33 +2117,6 @@ function SettingsView({
       });
   }, [onAuthRequired, onThemePreferencePersisted, setError]);
 
-  function resetModels() {
-    if (!models) return;
-    setModels({
-      ...models,
-      theme: "default",
-      text_summary_model: null,
-      conversation_model: null,
-      xiaohongshu_model: null,
-      short_video_script_model: null,
-      suggested_questions_model: null,
-      text_summary_thinking_mode: normalizeThinkingMode(models.defaults.text_summary_thinking_mode),
-      conversation_thinking_mode: normalizeThinkingMode(models.defaults.conversation_thinking_mode),
-      xiaohongshu_thinking_mode: normalizeThinkingMode(models.defaults.xiaohongshu_thinking_mode),
-      short_video_script_thinking_mode: normalizeThinkingMode(models.defaults.short_video_script_thinking_mode),
-      suggested_questions_thinking_mode: normalizeThinkingMode(models.defaults.suggested_questions_thinking_mode)
-    });
-    onThemePreferenceChange("default");
-  }
-
-  function updateModelField(key: ModelSettingKey, nextValue: string) {
-    setModels((value) => value && { ...value, [key]: nextValue });
-  }
-
-  function updateThinkingMode(key: ThinkingModeKey, nextValue: ThinkingMode) {
-    setModels((value) => value && { ...value, [key]: nextValue });
-  }
-
   function updateThemePreference(nextValue: ThemePreference) {
     setModels((value) => value && { ...value, theme: nextValue });
     onThemePreferenceChange(nextValue);
@@ -1747,8 +2124,9 @@ function SettingsView({
 
   async function saveSettings() {
     if (!models) return;
+    const normalizedApiBase = normalizeApiBaseInput(apiBaseValue);
     try {
-      new URL(apiBaseValue);
+      new URL(normalizedApiBase);
     } catch {
       setError("后端地址需要是完整 URL，例如 http://127.0.0.1:8000");
       return;
@@ -1757,7 +2135,8 @@ function SettingsView({
     setError(null);
     setSavedAt(null);
     try {
-      await setApiBase(apiBaseValue);
+      await persistApiBasePreference(normalizedApiBase);
+      setApiBaseValue(normalizedApiBase || defaultApiBase);
       const nextSettings = await updateModelSettings(models);
       const nextThemePreference = normalizeThemePreference(nextSettings.theme);
       setModels({ ...nextSettings, theme: nextThemePreference });
@@ -1783,12 +2162,13 @@ function SettingsView({
         <div className="section-heading">
           <div>
             <strong>连接</strong>
-            <span>侧边栏会通过这个地址访问 FastAPI 后端。</span>
+            <span>侧边栏会通过这个地址访问 FastAPI 后端，恢复默认后保存即可生效。</span>
           </div>
+          <button type="button" onClick={() => setApiBaseValue(defaultApiBase)}><RotateCcw size={15} />恢复默认</button>
         </div>
         <label>
           后端地址
-          <input value={apiBaseValue} onChange={(event) => setApiBaseValue(event.target.value)} placeholder="http://127.0.0.1:8000" />
+          <input value={apiBaseValue} onChange={(event) => setApiBaseValue(event.target.value)} placeholder={defaultApiBase} />
         </label>
       </div>
 
@@ -1819,62 +2199,24 @@ function SettingsView({
         </div>
       </div>
 
-      <div className="settings-section">
-        <div className="section-heading">
-          <div>
-            <strong>模型</strong>
-            <span>留空时使用后端默认值。</span>
-          </div>
-          <button type="button" onClick={resetModels} disabled={!models}><RotateCcw size={15} />默认</button>
+      <div className="settings-section settings-footer">
+        <div className="settings-footer-copy">
+          <strong>应用更改</strong>
+          <span>修改连接地址或主题后，点击保存设置即可生效。</span>
         </div>
-        {MODEL_SETTING_ROWS.map((row) => {
-          const thinkingMode = (models?.[row.thinkingKey] || "default") as ThinkingMode;
-          return (
-            <div className="model-setting-row" key={row.modelKey}>
-              <label>
-                {row.label}
-                <input
-                  value={models?.[row.modelKey] || ""}
-                  placeholder={models?.defaults[row.modelKey]}
-                  onChange={(event) => updateModelField(row.modelKey, event.target.value)}
-                />
-              </label>
-              <div className="thinking-mode-row">
-                <span className="thinking-mode-label">深度思考</span>
-                <div className="thinking-toggle" role="group" aria-label={`${row.label}深度思考模式`}>
-                  {THINKING_MODE_OPTIONS.map((option) => (
-                    <button
-                      key={option.value}
-                      type="button"
-                      className={thinkingMode === option.value ? "active" : ""}
-                      title={option.title}
-                      onClick={() => updateThinkingMode(row.thinkingKey, option.value)}
-                      disabled={!models}
-                    >
-                      {option.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-          );
-        })}
+        <div className="settings-footer-actions">
+          {savedAt && <div className="save-state"><Check size={15} />已在 {savedAt} 保存</div>}
+          <button className="primary-button" onClick={() => void saveSettings()} disabled={loading || !models}>
+            {loading ? <Loader2 className="spin" size={16} /> : <Save size={16} />}
+            保存设置
+          </button>
+        </div>
       </div>
 
-      <div className="settings-actions">
-        <button className="primary-button" onClick={() => void saveSettings()} disabled={loading || !models}>
-          {loading ? <Loader2 className="spin" size={16} /> : <Save size={16} />}
-          保存设置
-        </button>
-        {savedAt && <div className="save-state"><Check size={15} />已在 {savedAt} 保存</div>}
-      </div>
-
-      <div className="settings-section settings-account-section">
-        <div className="section-heading">
-          <div>
-            <strong>账户</strong>
-            <span>需要时再重新登录即可。</span>
-          </div>
+      <div className="settings-section settings-account-row">
+        <div className="settings-account-copy">
+          <strong>账户</strong>
+          <span>需要时再重新登录即可。</span>
         </div>
         <button className="settings-logout-button" type="button" onClick={onLogout} disabled={logoutPending}>
           {logoutPending ? <Loader2 className="spin" size={16} /> : <LogOut size={16} />}

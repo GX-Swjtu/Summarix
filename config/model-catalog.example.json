@@ -1,0 +1,38 @@
+{
+  "available_models": [
+    {
+      "id": "automatic",
+      "name": "qwen3.5-flash",
+      "description": "高性能通用模型，适合日常使用",
+      "is_premium": false,
+      "icon_url": "qwen-color.svg",
+      "api_base": "",
+      "api_key": "",
+      "litellm_model": "dashscope/qwen3.5-flash",
+      "supports_thinking_config": true,
+      "default_thinking_mode": "default"
+    },
+    {
+      "id": "claude-sonnet",
+      "name": "qwen3.5-plus",
+      "description": "强大的通用模型，适合需要更深入推理的场景",
+      "is_premium": true,
+      "icon_url": "qwen-color.svg",
+      "api_base": "",
+      "api_key": "",
+      "litellm_model": "dashscope/qwen3.5-plus",
+      "supports_thinking_config": true,
+      "default_thinking_mode": "default"
+    }
+  ],
+  "suggested_questions_model": {
+    "id": "suggested-light",
+    "name": "Suggested Questions Light",
+    "description": "用于生成建议问题的低成本模型",
+    "api_base": "",
+    "api_key": "",
+    "litellm_model": "dashscope/qwen3.5-flash",
+    "supports_thinking_config": true,
+    "default_thinking_mode": "disabled"
+  }
+}

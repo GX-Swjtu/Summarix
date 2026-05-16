@@ -49,9 +49,15 @@ uv run --env-file .env main.py
 
 LiteLLM 模型请直接使用 `provider/model` 形式，例如 `dashscope/qwen3.5-flash` 或 `dashscope/qwen3.5-flash`。后端不会再自动补全 provider。
 
-模型可按任务分别配置：`TEXT_SUMMARY_MODEL` 用于网页总结，`CONVERSATION_MODEL` 用于通用对话，`XIAOHONGSHU_MODEL` 用于小红书文案，`SHORT_VIDEO_SCRIPT_MODEL` 用于短视频脚本，`SUGGESTED_QUESTIONS_MODEL` 用于下一步建议问题。用户也可以在 Side Panel 设置页覆盖这些模型。
+当前推荐通过文件统一配置模型，而不是按任务分别写环境变量。把 `.env.example` 里的 `MODEL_CATALOG_FILE` 指向一个 JSON 文件即可；可直接参考 [config/model-catalog.example.json](config/model-catalog.example.json)。
 
-每个模型角色都支持 thinking mode 三态配置：`default` 不向 LiteLLM 传 `extra_body`，`enabled` 传 `{"extra_body":{"enable_thinking":true}}`，`disabled` 传 `{"extra_body":{"enable_thinking":false}}`。对应环境变量为 `TEXT_SUMMARY_THINKING_MODE`、`CONVERSATION_THINKING_MODE`、`XIAOHONGSHU_THINKING_MODE`、`SHORT_VIDEO_SCRIPT_THINKING_MODE`、`SUGGESTED_QUESTIONS_THINKING_MODE`；建议问题默认使用 `disabled`，其他角色默认使用 `default`。
+模型配置文件支持两个顶层字段：`available_models` 和 `suggested_questions_model`。`available_models` 的顺序就是前端聊天输入框旁模型菜单的顺序，第一个模型会作为默认主力模型；`suggested_questions_model` 只用于后台生成下一步建议问题，不会展示给用户。
+
+模型图标默认从 `MODEL_ASSET_ROOT` 指定的本地目录读取，默认目录是仓库根目录下的 `iconResources`。因此你只需要把图标文件放进 `iconResources/`，然后在 JSON 里把 `icon_url` 写成相对路径，例如 `qwen-color.svg` 或 `iconResources/qwen-color.svg`；后端会自动把它转换成前端可直接访问的 URL。
+
+每个可选模型对象至少建议包含：`id`、`name`、`description`、`is_premium`、`icon_url`、`api_base`、`api_key`、`litellm_model`、`supports_thinking_config`、`default_thinking_mode`。其中 `litellm_model` 必填，`default_thinking_mode` 支持 `default`、`enabled`、`disabled`。如果 `supports_thinking_config=false`，前端不会给用户展示 thinking 子菜单。
+
+兼容旧方式时，仍可通过 `MODEL_CATALOG_JSON` 内联 JSON，或继续使用 `TEXT_SUMMARY_MODEL`、`CONVERSATION_MODEL`、`XIAOHONGSHU_MODEL`、`SHORT_VIDEO_SCRIPT_MODEL`、`SUGGESTED_QUESTIONS_MODEL` 等旧环境变量作为兜底；但前端用户选择入口已经统一为“一个主力模型”。
 
 如果已有开发库是在这些模型偏好列加入前创建的，需要重建本地开发库或手动补齐 `user_model_preferences` 新列；项目当前没有迁移脚本，`DATABASE_AUTO_CREATE_TABLES=true` 只会创建缺失表，不会修改已存在表结构。
 
@@ -65,7 +71,31 @@ npm install
 npm run build
 ```
 
-然后在 Chrome 或 Edge 的扩展管理页启用开发者模式，加载 `extension/dist`。插件默认请求 `http://127.0.0.1:8000`，也可以在 Side Panel 设置页修改后端地址。
+然后在 Chrome 或 Edge 的扩展管理页启用开发者模式，加载 `extension/dist`。
+
+插件的后端地址优先级如下：
+
+1. 登录页或 Side Panel 设置页里手动填写的后端地址。
+2. 编译扩展时通过 `SUMMARIX_DEFAULT_API_BASE` 注入的默认地址。
+3. 扩展代码中的兜底默认值 `http://127.0.0.1:8000`。
+
+如果构建出来的默认地址不对，用户可以在登录页先修改后端地址再登录；登录后也可以在设置页继续调整。登录页和设置页都提供“恢复默认”按钮，用来回到编译时默认地址。
+
+如果你希望在构建时写死一个新的默认后端地址，可以在构建前设置环境变量：
+
+```powershell
+cd extension
+$env:SUMMARIX_DEFAULT_API_BASE = "https://your-backend.example.com"
+npm run build
+Remove-Item Env:SUMMARIX_DEFAULT_API_BASE
+```
+
+```bash
+cd extension
+SUMMARIX_DEFAULT_API_BASE=https://your-backend.example.com npm run build
+```
+
+如果你不想依赖构建环境变量，也可以直接修改 `extension/src/shared/api.ts` 里的兜底默认值 `FALLBACK_API_BASE`，然后重新构建扩展。
 
 加载插件后，把扩展管理页显示的扩展 ID 配置到后端环境变量，例如：
 
