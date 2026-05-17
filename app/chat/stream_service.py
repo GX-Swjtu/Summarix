@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 IMAGE_UNSUPPORTED_ERROR_MESSAGE = "当前模型不支持图片输入，请更换支持图像输入的模型后重试。"
 GENERIC_STREAM_ERROR_MESSAGE = "AI 响应生成失败，请稍后重试。"
 GUARDRAIL_ERROR_MESSAGE = "当前输入未通过安全检查，请调整问题后重试。"
+PROVIDER_BLOCKED_STATUS = "provider_blocked"
 IMAGE_UNSUPPORTED_ERROR_PATTERNS = (
     "does not support image",
     "doesn't support image",
@@ -38,9 +39,24 @@ IMAGE_UNSUPPORTED_ERROR_PATTERNS = (
     "vision is not supported",
     "multimodal",
 )
+PROVIDER_CONTENT_BLOCK_PATTERNS = (
+    "data_inspection_failed",
+    "input or output data may contain inappropriate content",
+    "input data may contain inappropriate content",
+    "output data may contain inappropriate content",
+    "blocked by faq rule",
+    "blocked by custom rule",
+)
 PAGE_TEXT_PROMPT_LIMIT = 30000
 SUGGESTED_QUESTIONS_CONTEXT_LIMIT = 12000
 SUGGESTED_QUESTIONS_RECENT_MESSAGE_LIMIT = 8
+
+
+class SuggestedQuestionsProviderBlockedError(RuntimeError):
+    def __init__(self, *, model_name: str | None, reason: str) -> None:
+        super().__init__("建议问题生成被供应商内容审查拦截")
+        self.model_name = model_name or "unknown"
+        self.reason = reason
 
 async def ensure_adk_session(user_id: str, conversation: Conversation, settings: Settings) -> None:
     if settings.chat_agent_mode != "adk":
@@ -157,6 +173,31 @@ def is_image_unsupported_error(error: Exception, artifacts: Sequence[MessageArti
         return False
     message = str(error).lower()
     return any(pattern in message for pattern in IMAGE_UNSUPPORTED_ERROR_PATTERNS)
+
+
+def build_exception_message_chain(error: BaseException) -> str:
+    messages: list[str] = []
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        message = str(current).strip()
+        if message:
+            messages.append(message)
+        current = current.__cause__ or current.__context__
+    return " | ".join(messages)
+
+
+def normalize_provider_block_reason(error: Exception) -> str:
+    message = re.sub(r"\s+", " ", build_exception_message_chain(error)).strip()
+    if len(message) <= 500:
+        return message
+    return message[:497] + "..."
+
+
+def is_provider_content_block_error(error: Exception) -> bool:
+    message = normalize_provider_block_reason(error).lower()
+    return any(pattern in message for pattern in PROVIDER_CONTENT_BLOCK_PATTERNS)
 
 
 def build_prompt(request: ChatStreamRequest, artifacts: Sequence[MessageArtifact], conversation: Conversation | None = None) -> str:
@@ -475,7 +516,13 @@ async def call_suggested_questions_model(prompt: str, model_config: WebAssistant
         )
         usage = extract_token_usage(response)
         return extract_litellm_response_text(response)
-    except Exception:
+    except Exception as error:
+        if is_provider_content_block_error(error):
+            status = PROVIDER_BLOCKED_STATUS
+            raise SuggestedQuestionsProviderBlockedError(
+                model_name=model_name,
+                reason=normalize_provider_block_reason(error),
+            ) from error
         status = "error"
         raise
     finally:
@@ -511,8 +558,27 @@ async def stream_suggested_questions_for_conversation(
 ) -> AsyncIterator[dict[str, str]]:
     try:
         questions = await generate_suggested_questions(session, user_id, conversation, settings, count)
+    except SuggestedQuestionsProviderBlockedError as error:
+        logger.error(
+            "下一步建议问题被供应商内容审查拦截，model=%s reason=%s",
+            error.model_name,
+            error.reason,
+            extra={
+                "user_id": user_id,
+                "conversation_id": conversation.id,
+                "model_name": error.model_name,
+                "llm_status": PROVIDER_BLOCKED_STATUS,
+            },
+        )
+        questions = []
     except Exception:
-        logger.exception("下一步建议问题生成失败，user_id=%s conversation_id=%s", user_id, conversation.id)
+        logger.exception(
+            "下一步建议问题生成失败",
+            extra={
+                "user_id": user_id,
+                "conversation_id": conversation.id,
+            },
+        )
         questions = []
     if questions:
         yield {"event": "suggested_questions", "data": serialize_suggested_questions_payload(questions)}

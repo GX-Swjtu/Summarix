@@ -7,10 +7,10 @@ from httpx import AsyncClient
 from google.adk.errors.already_exists_error import AlreadyExistsError
 from google.adk.agents.run_config import StreamingMode
 
-from app.api.schemas import ChatStreamRequest
+from app.api.schemas import ChatStreamRequest, SuggestedQuestionsStreamRequest
 from app.chat.agent_factory import WebAssistantModelConfig, build_litellm_kwargs, create_web_assistant
 from app.chat.runner import clear_runner_cache, create_runner, get_adk_session_service, get_or_create_runner
-from app.chat.stream_service import ensure_adk_session, load_model_config, stream_chat_response
+from app.chat.stream_service import ensure_adk_session, load_model_config, stream_chat_response, stream_suggested_questions_response
 from app.core.config import Settings
 from app.db.models import Conversation, Message, MessageArtifact, User, UserModelPreference
 from app.db.session import AsyncSessionLocal
@@ -510,6 +510,165 @@ async def test_stream_chat_keeps_generic_error_when_no_image_artifact(monkeypatc
     error_event = next(event for event in events if event["event"] == "error")
     assert error_event["data"] == "AI 响应生成失败，请稍后重试。"
     assert not any(event["event"] == "done" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_suppresses_suggested_questions_when_provider_blocks_them(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    async def fake_ensure_adk_session(*_: object, **__: object) -> None:
+        return None
+
+    async def fake_load_artifact_parts(*_: object, **__: object) -> list[object]:
+        return []
+
+    class StubRunner:
+        async def run_async(self, **_: object):
+            yield StubEvent(text="我先看一下截图内容。", thought=False, partial=False, final=True, turn_complete=True)
+
+    async def fake_acompletion(*_: object, **__: object):
+        raise RuntimeError(
+            "DashscopeException - <400> InternalError.Algo.DataInspectionFailed: Output data may contain inappropriate content."
+        )
+
+    request_statuses: list[tuple[str, str | None, str]] = []
+    duration_statuses: list[tuple[str, str | None, str]] = []
+
+    def capture_request(operation: str, model_name: str | None, status: str) -> None:
+        request_statuses.append((operation, model_name, status))
+
+    def capture_duration(operation: str, model_name: str | None, status: str, _: float) -> None:
+        duration_statuses.append((operation, model_name, status))
+
+    monkeypatch.setattr("app.chat.stream_service.ensure_adk_session", fake_ensure_adk_session)
+    monkeypatch.setattr("app.chat.stream_service.load_artifact_parts", fake_load_artifact_parts)
+    monkeypatch.setattr("app.chat.stream_service.get_or_create_runner", lambda *_: StubRunner())
+    monkeypatch.setattr("litellm.acompletion", fake_acompletion)
+    monkeypatch.setattr("app.chat.stream_service.record_llm_request", capture_request)
+    monkeypatch.setattr("app.chat.stream_service.observe_llm_duration", capture_duration)
+
+    settings = Settings(
+        jwt_secret_key="x" * 32,
+        database_url="sqlite+aiosqlite:///:memory:",
+        chat_agent_mode="adk",
+    )
+
+    async with AsyncSessionLocal() as session:
+        user = User(email="suggested-provider-block@example.com", password_hash="hashed")
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+
+        artifact = MessageArtifact(
+            user_id=user.id,
+            filename="screen.png",
+            storage_filename="screen.png",
+            mime_type="image/png",
+            size_bytes=10,
+            version=0,
+            source="screenshot",
+        )
+        session.add(artifact)
+        await session.commit()
+        await session.refresh(artifact)
+
+        with caplog.at_level(logging.ERROR, logger="app.chat.stream_service"):
+            events = [
+                event
+                async for event in stream_chat_response(
+                    session,
+                    user.id,
+                    ChatStreamRequest(
+                        message="请结合截图说明重点",
+                        context=None,
+                        artifact_ids=[artifact.id],
+                        suggested_questions=True,
+                    ),
+                    settings,
+                )
+            ]
+
+    event_names = [event["event"] for event in events]
+    assert "conversation" in event_names
+    assert "persisted" in event_names
+    assert "done" in event_names
+    assert "suggested_questions" not in event_names
+    assert "error" not in event_names
+    assert any(operation == "chat_stream" and status == "success" for operation, _, status in request_statuses)
+    assert any(
+        operation == "suggested_questions" and status == "provider_blocked"
+        for operation, _, status in request_statuses
+    )
+    assert any(
+        operation == "suggested_questions" and status == "provider_blocked"
+        for operation, _, status in duration_statuses
+    )
+
+    blocked_record = next(
+        record for record in caplog.records if "下一步建议问题被供应商内容审查拦截" in record.getMessage()
+    )
+    assert blocked_record.user_id == user.id
+    assert blocked_record.conversation_id
+    assert blocked_record.model_name == settings.effective_suggested_questions_model
+    assert blocked_record.llm_status == "provider_blocked"
+
+
+@pytest.mark.asyncio
+async def test_stream_suggested_questions_response_stays_silent_when_provider_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async def fake_acompletion(*_: object, **__: object):
+        raise RuntimeError(
+            "DashscopeException - <400> InternalError.Algo.DataInspectionFailed: Output data may contain inappropriate content."
+        )
+
+    request_statuses: list[tuple[str, str]] = []
+
+    def capture_request(operation: str, _: str | None, status: str) -> None:
+        request_statuses.append((operation, status))
+
+    monkeypatch.setattr("litellm.acompletion", fake_acompletion)
+    monkeypatch.setattr("app.chat.stream_service.record_llm_request", capture_request)
+    monkeypatch.setattr("app.chat.stream_service.observe_llm_duration", lambda *_: None)
+
+    settings = Settings(
+        jwt_secret_key="x" * 32,
+        database_url="sqlite+aiosqlite:///:memory:",
+        chat_agent_mode="adk",
+    )
+
+    async with AsyncSessionLocal() as session:
+        user = User(email="suggested-endpoint-provider-block@example.com", password_hash="hashed")
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+
+        conversation = Conversation(user_id=user.id, title="截图会话")
+        session.add(conversation)
+        await session.commit()
+        await session.refresh(conversation)
+
+        session.add_all(
+            [
+                Message(conversation_id=conversation.id, role="user", content="请解释这张截图"),
+                Message(conversation_id=conversation.id, role="assistant", content="截图里展示了一个流程图。"),
+            ]
+        )
+        await session.commit()
+
+        events = [
+            event
+            async for event in stream_suggested_questions_response(
+                session,
+                user.id,
+                SuggestedQuestionsStreamRequest(conversation_id=conversation.id, count=3),
+                settings,
+            )
+        ]
+
+    assert events == [{"event": "done", "data": ""}]
+    assert ("suggested_questions", "provider_blocked") in request_statuses
 
 
 @pytest.mark.asyncio

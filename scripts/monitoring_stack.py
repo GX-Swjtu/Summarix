@@ -365,7 +365,7 @@ def ensure_langwatch_api_key_configured(file_values: dict[str, str] | None = Non
         print("已复用现有 LANGWATCH_API_KEY。")
         return existing_key
 
-    public_url = env_value("LANGWATCH_PUBLIC_URL", runtime_values, "https://127.0.0.1:5560") or "https://127.0.0.1:5560"
+    public_url = env_value("LANGWATCH_PUBLIC_URL", runtime_values, "https://localhost:5560") or "https://localhost:5560"
     print("未检测到 LANGWATCH_API_KEY，接下来将按 LangWatch 官方推荐方式完成接入。")
     print(f"请先在浏览器打开 {public_url}，注册或登录 LangWatch。")
     print(f"登录后请创建或选择一个项目；建议项目名使用 {LANGWATCH_BOOTSTRAP_PROJECT_NAME}，这样后续文档与界面名称一致。")
