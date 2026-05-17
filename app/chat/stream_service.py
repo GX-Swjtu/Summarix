@@ -83,7 +83,7 @@ async def ensure_adk_session(user_id: str, conversation: Conversation, settings:
 async def get_or_create_conversation(session: AsyncSession, user_id: str, request: ChatStreamRequest, settings: Settings) -> Conversation:
     if request.conversation_id:
         result = await session.execute(
-            select(Conversation).where(Conversation.id == request.conversation_id, Conversation.user_id == user_id)
+            select(Conversation).where(Conversation.id == request.conversation_id, Conversation.user_id == user_id, Conversation.deleted_at.is_(None))
         )
         conversation = result.scalar_one_or_none()
         if conversation is not None:
@@ -592,7 +592,7 @@ async def stream_suggested_questions_response(
 ) -> AsyncIterator[dict[str, str]]:
     settings = settings or get_settings()
     result = await session.execute(
-        select(Conversation).where(Conversation.id == request.conversation_id, Conversation.user_id == user_id)
+        select(Conversation).where(Conversation.id == request.conversation_id, Conversation.user_id == user_id, Conversation.deleted_at.is_(None))
     )
     conversation = result.scalar_one_or_none()
     if conversation is None:

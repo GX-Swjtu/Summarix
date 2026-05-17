@@ -30,6 +30,7 @@ import {
   Sun,
   ThumbsDown,
   ThumbsUp,
+  Trash2,
   Wand2,
   X
 } from "lucide-react";
@@ -42,6 +43,7 @@ import remarkGfm from "remark-gfm";
 import {
   clearCachedUser,
   clearRememberedAuth,
+  deleteHistory,
   getApiBase,
   getArtifactObjectUrl,
   getDefaultApiBase,
@@ -620,7 +622,7 @@ function AuthScreen(props: { onAuthed: (user: User) => void; error: string | nul
           type="button"
           className={`auth-settings-toggle${connectionSettingsOpen ? " open" : ""}`}
           onClick={() => setConnectionSettingsOpen((value) => !value)}
-          aria-expanded={connectionSettingsOpen}
+          aria-expanded={connectionSettingsOpen ? "true" : "false"}
           aria-controls="auth-connection-settings"
         >
           <span className="auth-settings-toggle-copy">
@@ -1960,6 +1962,8 @@ function HistoryView({
   const [query, setQuery] = useState("");
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [deleteConfirming, setDeleteConfirming] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const filteredItems = useMemo(() => {
     const keyword = query.trim().toLowerCase();
@@ -1975,7 +1979,10 @@ function HistoryView({
       setItems((current) => (append ? [...current, ...page.items] : page.items));
       setOffset(page.offset + page.items.length);
       setHasMore(page.has_more);
-      if (!append) setDetail(null);
+      if (!append) {
+        setDetail(null);
+        setDeleteConfirming(false);
+      }
     } catch (error) {
       if (isAuthRequiredError(error)) onAuthRequired();
       else setError(error instanceof Error ? error.message : "加载历史失败");
@@ -1990,11 +1997,31 @@ function HistoryView({
 
   async function openDetail(id: string) {
     setError(null);
+    setDeleteConfirming(false);
     try {
       setDetail(await getHistoryDetail(id));
     } catch (error) {
       if (isAuthRequiredError(error)) onAuthRequired();
       else setError(error instanceof Error ? error.message : "加载历史详情失败");
+    }
+  }
+
+  async function confirmDelete() {
+    if (!detail) return;
+    const deletedId = detail.id;
+    setDeleting(true);
+    setError(null);
+    try {
+      await deleteHistory(deletedId);
+      setItems((current) => current.filter((item) => item.id !== deletedId));
+      setOffset((current) => Math.max(0, current - 1));
+      setDetail((current) => (current?.id === deletedId ? null : current));
+      setDeleteConfirming(false);
+    } catch (error) {
+      if (isAuthRequiredError(error)) onAuthRequired();
+      else setError(error instanceof Error ? error.message : "删除历史失败");
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -2026,11 +2053,25 @@ function HistoryView({
           {detail ? (
             <>
               <div className="detail-header">
-                <div>
+                <div className="detail-title">
                   <strong>{detail.title}</strong>
                   <span>{detail.page_title || detail.page_url || "历史会话"}</span>
                 </div>
-                <button onClick={() => onContinue(detail)}><MessageSquare size={15} />继续</button>
+                <div className="detail-actions">
+                  <button onClick={() => onContinue(detail)} disabled={deleting}><MessageSquare size={15} />继续</button>
+                  {deleteConfirming ? (
+                    <>
+                      <button onClick={() => setDeleteConfirming(false)} disabled={deleting}>取消</button>
+                      <button className="danger-button" onClick={() => void confirmDelete()} disabled={deleting}>
+                        <Trash2 size={15} />{deleting ? "删除中" : "确认删除"}
+                      </button>
+                    </>
+                  ) : (
+                    <button className="danger-button subtle" onClick={() => setDeleteConfirming(true)} disabled={deleting}>
+                      <Trash2 size={15} />删除
+                    </button>
+                  )}
+                </div>
               </div>
               <div className="history-messages">
                 {detail.messages.map((message) => (

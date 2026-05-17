@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const apiMocks = vi.hoisted(() => ({
   clearCachedUser: vi.fn().mockResolvedValue(undefined),
   clearRememberedAuth: vi.fn().mockResolvedValue(undefined),
+  deleteHistory: vi.fn(),
   getApiBase: vi.fn().mockResolvedValue("https://stored.example.com"),
   getArtifactObjectUrl: vi.fn(),
   getDefaultApiBase: vi.fn(() => "https://compiled.example.com"),
@@ -78,6 +79,8 @@ beforeEach(() => {
   apiMocks.getApiBase.mockResolvedValue("https://stored.example.com");
   apiMocks.getMe.mockResolvedValue(null);
   apiMocks.getModelSettings.mockResolvedValue(defaultModelSettings);
+  apiMocks.listHistory.mockResolvedValue({ items: [], limit: 20, offset: 0, has_more: false });
+  apiMocks.deleteHistory.mockResolvedValue(undefined);
   apiMocks.updateModelSettings.mockResolvedValue(defaultModelSettings);
   apiMocks.readCachedModelSelection.mockResolvedValue(null);
   apiMocks.readCachedUser.mockResolvedValue(null);
@@ -244,6 +247,70 @@ describe("sidepanel model picker", () => {
     });
     expect(document.documentElement.dataset.theme).toBe("light");
     expect(apiMocks.getModelSettings).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("sidepanel history deletion", () => {
+  const currentUser = { id: "user-id", email: "tester@example.com", created_at: "2026-05-15T00:00:00Z" };
+  const summary = {
+    id: "conversation-id",
+    title: "会议纪要",
+    page_url: "https://example.com/report",
+    page_title: "季度报告",
+    updated_at: "2026-05-18T00:20:00Z"
+  };
+  const detail = {
+    ...summary,
+    messages: [
+      {
+        id: "message-id",
+        role: "assistant",
+        content: "完整回复内容",
+        trace_id: null,
+        adk_invocation_id: null,
+        created_at: "2026-05-18T00:20:00Z",
+        artifacts: [],
+        feedback: null
+      }
+    ],
+    artifacts: []
+  };
+
+  it("在历史详情页确认删除后移除当前会话", async () => {
+    apiMocks.readCachedUser.mockResolvedValue(currentUser);
+    apiMocks.listHistory.mockResolvedValue({ items: [summary], limit: 20, offset: 0, has_more: false });
+    apiMocks.getHistoryDetail.mockResolvedValue(detail);
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "历史" }));
+    fireEvent.click(await screen.findByRole("button", { name: /会议纪要/ }));
+    expect(await screen.findByText("完整回复内容")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+
+    await waitFor(() => expect(apiMocks.deleteHistory).toHaveBeenCalledWith("conversation-id"));
+    await waitFor(() => expect(screen.queryByText("完整回复内容")).not.toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: /会议纪要/ })).not.toBeInTheDocument();
+    expect(screen.getByText("选择一条历史记录")).toBeInTheDocument();
+  });
+
+  it("删除失败时保留当前详情并提示错误", async () => {
+    apiMocks.readCachedUser.mockResolvedValue(currentUser);
+    apiMocks.listHistory.mockResolvedValue({ items: [summary], limit: 20, offset: 0, has_more: false });
+    apiMocks.getHistoryDetail.mockResolvedValue(detail);
+    apiMocks.deleteHistory.mockRejectedValue(new Error("删除历史失败"));
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "历史" }));
+    fireEvent.click(await screen.findByRole("button", { name: /会议纪要/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "删除" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+
+    expect(await screen.findByText("完整回复内容")).toBeInTheDocument();
+    expect(await screen.findByRole("alert")).toHaveTextContent("删除历史失败");
   });
 });
 

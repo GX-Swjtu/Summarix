@@ -14,7 +14,7 @@ EXPECTED_TABLES = {
     "user_model_preferences",
     "message_feedback",
 }
-INITIAL_REVISION = "202605170001"
+HEAD_REVISION = "202605180001"
 
 
 async def get_table_names() -> set[str]:
@@ -32,7 +32,7 @@ async def test_upgrade_database_creates_current_schema_from_empty_database():
         revision = (await connection.execute(text("SELECT version_num FROM alembic_version"))).scalar_one()
 
     assert EXPECTED_TABLES.issubset(table_names)
-    assert revision == INITIAL_REVISION
+    assert revision == HEAD_REVISION
 
 
 @pytest.mark.asyncio

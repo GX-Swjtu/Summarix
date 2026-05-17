@@ -192,6 +192,30 @@ async def test_stream_suggested_questions_endpoint_returns_clickable_questions(a
 
 
 @pytest.mark.asyncio
+async def test_stream_suggested_questions_returns_error_for_deleted_conversation(authenticated_client: AsyncClient):
+    chat_response = await authenticated_client.post(
+        "/api/chat/stream",
+        json={"message": "先建立一个会话", "context": None, "artifact_ids": []},
+    )
+    assert chat_response.status_code == 200
+    conversation_id = json.loads(
+        next(event for event in parse_sse_events(chat_response.text) if event["event"] == "conversation")["data"]
+    )["id"]
+
+    delete_response = await authenticated_client.delete(f"/api/history/{conversation_id}")
+    assert delete_response.status_code == 204
+
+    response = await authenticated_client.post(
+        "/api/chat/suggestions/stream",
+        json={"conversation_id": conversation_id, "count": 2},
+    )
+
+    assert response.status_code == 200
+    events = parse_sse_events(response.text)
+    assert events == [{"event": "error", "data": "会话不存在或无权访问"}]
+
+
+@pytest.mark.asyncio
 async def test_stream_chat_returns_page_reference_artifact(authenticated_client: AsyncClient):
     response = await authenticated_client.post(
         "/api/chat/stream",
@@ -288,6 +312,31 @@ async def test_stream_chat_followup_without_context_does_not_create_page_referen
     assert [artifact["source"] for artifact in detail["messages"][0]["artifacts"]] == ["page_text"]
     assert detail["messages"][2]["artifacts"] == []
     assert [artifact["source"] for artifact in detail["artifacts"]] == ["page_text"]
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_deleted_conversation_id_starts_new_conversation(authenticated_client: AsyncClient):
+    first_response = await authenticated_client.post(
+        "/api/chat/stream",
+        json={"message": "创建后删除的会话", "context": None, "artifact_ids": []},
+    )
+    assert first_response.status_code == 200
+    first_payload = json.loads(next(event for event in parse_sse_events(first_response.text) if event["event"] == "conversation")["data"])
+
+    delete_response = await authenticated_client.delete(f"/api/history/{first_payload['id']}")
+    assert delete_response.status_code == 204
+
+    followup_response = await authenticated_client.post(
+        "/api/chat/stream",
+        json={"conversation_id": first_payload["id"], "message": "继续这个已删除会话", "context": None, "artifact_ids": []},
+    )
+
+    assert followup_response.status_code == 200
+    followup_payload = json.loads(next(event for event in parse_sse_events(followup_response.text) if event["event"] == "conversation")["data"])
+    assert followup_payload["id"] != first_payload["id"]
+
+    old_detail_response = await authenticated_client.get(f"/api/history/{first_payload['id']}")
+    assert old_detail_response.status_code == 404
 
 
 @pytest.mark.asyncio

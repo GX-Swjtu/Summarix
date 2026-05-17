@@ -1,5 +1,9 @@
 import pytest
+from sqlalchemy import select
 from httpx import AsyncClient
+
+from app.db.models import Conversation
+from app.db.session import AsyncSessionLocal
 
 
 @pytest.mark.asyncio
@@ -64,3 +68,40 @@ async def test_history_list_and_detail(authenticated_client: AsyncClient):
     assert page_reference_artifact["page_url"] == "https://example.com/history-reference"
     assert page_reference_artifact["page_title"] == "历史参考页面"
     assert "历史详情应保留" in page_reference_artifact["text_excerpt"]
+
+
+@pytest.mark.asyncio
+async def test_delete_history_soft_deletes_conversation(authenticated_client: AsyncClient):
+    for index in range(2):
+        stream_response = await authenticated_client.post(
+            "/api/chat/stream",
+            json={"message": f"待清理历史 {index}", "context": None, "artifact_ids": []},
+        )
+        assert stream_response.status_code == 200
+
+    list_response = await authenticated_client.get("/api/history?offset=0&limit=20")
+    assert list_response.status_code == 200
+    items = list_response.json()["items"]
+    assert len(items) == 2
+    deleted_id = items[0]["id"]
+    kept_id = items[1]["id"]
+
+    delete_response = await authenticated_client.delete(f"/api/history/{deleted_id}")
+    assert delete_response.status_code == 204
+    assert delete_response.text == ""
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(Conversation).where(Conversation.id == deleted_id))
+        deleted_conversation = result.scalar_one()
+    assert deleted_conversation.deleted_at is not None
+
+    page_after_delete = (await authenticated_client.get("/api/history?offset=0&limit=20")).json()
+    assert [item["id"] for item in page_after_delete["items"]] == [kept_id]
+
+    detail_response = await authenticated_client.get(f"/api/history/{deleted_id}")
+    assert detail_response.status_code == 404
+    assert detail_response.json()["detail"] == "会话不存在"
+
+    repeated_delete_response = await authenticated_client.delete(f"/api/history/{deleted_id}")
+    assert repeated_delete_response.status_code == 404
+    assert repeated_delete_response.json()["detail"] == "会话不存在"

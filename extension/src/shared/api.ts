@@ -310,6 +310,10 @@ export async function getHistoryDetail(id: string): Promise<ConversationDetail> 
   return request<ConversationDetail>(`/api/history/${id}`);
 }
 
+export async function deleteHistory(id: string): Promise<void> {
+  return request<void>(`/api/history/${id}`, { method: "DELETE" });
+}
+
 export async function getModelSettings(): Promise<ModelSettings> {
   return request<ModelSettings>("/api/settings/models");
 }

@@ -5,7 +5,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_current_user
 from app.api.schemas import ArtifactResponse, ConversationDetail, ConversationSummary, HistoryPage, MessageFeedbackPublic, MessagePublic
-from app.db.models import Conversation, Message, MessageFeedback, User
+from app.db.models import Conversation, Message, MessageFeedback, User, utc_now
 from app.db.session import get_db_session
 
 router = APIRouter(prefix="/history", tags=["history"])
@@ -53,7 +53,7 @@ async def list_history(
 ) -> HistoryPage:
     result = await session.execute(
         select(Conversation)
-        .where(Conversation.user_id == current_user.id)
+        .where(Conversation.user_id == current_user.id, Conversation.deleted_at.is_(None))
         .order_by(Conversation.updated_at.desc())
         .offset(offset)
         .limit(limit + 1)
@@ -79,7 +79,7 @@ async def get_history_detail(
             selectinload(Conversation.messages).selectinload(Message.artifacts),
             selectinload(Conversation.artifacts),
         )
-        .where(Conversation.id == conversation_id, Conversation.user_id == current_user.id)
+        .where(Conversation.id == conversation_id, Conversation.user_id == current_user.id, Conversation.deleted_at.is_(None))
     )
     conversation = result.scalar_one_or_none()
     if conversation is None:
@@ -112,3 +112,19 @@ async def get_history_detail(
         ],
         artifacts=[artifact_response(artifact) for artifact in conversation.artifacts],
     )
+
+
+@router.delete("/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_history_conversation(
+    conversation_id: str,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> None:
+    result = await session.execute(
+        select(Conversation).where(Conversation.id == conversation_id, Conversation.user_id == current_user.id, Conversation.deleted_at.is_(None))
+    )
+    conversation = result.scalar_one_or_none()
+    if conversation is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="会话不存在")
+    conversation.deleted_at = utc_now()
+    await session.commit()

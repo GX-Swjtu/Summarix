@@ -184,7 +184,7 @@ a {
 }
 
 .brand-lockup > div:last-child,
-.detail-header div,
+.detail-title,
 .section-heading div {
   display: grid;
   gap: 2px;
@@ -1703,6 +1703,29 @@ textarea:focus {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
+}
+
+.detail-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.detail-header .danger-button {
+  border: 1px solid var(--danger-border);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.detail-header .danger-button:hover {
+  background: var(--danger-soft);
+  box-shadow: 0 8px 18px rgba(180, 35, 24, 0.12);
+}
+
+.detail-header .danger-button.subtle {
+  background: var(--surface-soft);
 }
 
 .detail-header strong,
