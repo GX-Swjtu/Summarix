@@ -15,7 +15,7 @@ from scripts.monitoring_stack import (
 
 
 def test_build_generated_env_uses_shared_postgres_defaults(monkeypatch) -> None:
-    for key in ("LANGWATCH_ENABLED", "PORT", "SUMMARIX_BACKEND_PORT"):
+    for key in ("LANGWATCH_ENABLED", "PORT", "SUMMARIX_BACKEND_PORT", "DATABASE_AUTO_CREATE_DATABASE"):
         monkeypatch.delenv(key, raising=False)
 
     persisted = build_persisted_env({}, {}, {})
@@ -27,6 +27,7 @@ def test_build_generated_env_uses_shared_postgres_defaults(monkeypatch) -> None:
     assert values["ADK_DATABASE_URL"] == f"postgresql+asyncpg://summarix:{expected_password}@postgres:5432/summarix"
     assert values["LANGWATCH_DATABASE_URL"] == f"postgresql://summarix:{expected_password}@postgres:5432/summarix?schema=langwatch"
     assert values["LANGWATCH_REDIS_URL"] == "redis://redis:6379"
+    assert values["DATABASE_AUTO_CREATE_DATABASE"] == "true"
     assert values["PROMETHEUS_ENABLED"] == "true"
     assert values["LANGWATCH_ENABLED"] == "true"
     assert values["LANGWATCH_APP_METRICS_TARGET"] == "langwatch-app:5560"
@@ -35,9 +36,23 @@ def test_build_generated_env_uses_shared_postgres_defaults(monkeypatch) -> None:
     assert len(values["JWT_SECRET_KEY"]) >= 32
 
 
+def test_build_generated_env_respects_explicit_auto_create_database_override() -> None:
+    persisted = build_persisted_env({}, {}, {"JWT_SECRET_KEY": "x" * 32})
+
+    values = build_generated_env(
+        {"DATABASE_AUTO_CREATE_DATABASE": "false"},
+        {},
+        persisted,
+        {},
+    )
+
+    assert values["DATABASE_AUTO_CREATE_DATABASE"] == "false"
+
+
 def test_build_generated_env_respects_existing_ports_and_urls(monkeypatch) -> None:
     for key in (
         "CHAT_AGENT_MODE",
+        "DATABASE_AUTO_CREATE_DATABASE",
         "PORT",
         "SUMMARIX_BACKEND_PORT",
         "LANGWATCH_ENABLED",
@@ -81,6 +96,8 @@ def test_build_generated_env_respects_existing_ports_and_urls(monkeypatch) -> No
 
 
 def test_build_generated_env_rewrites_local_langwatch_endpoint_for_docker_runtime() -> None:
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.delenv("DATABASE_AUTO_CREATE_DATABASE", raising=False)
     persisted = build_persisted_env({}, {}, {"JWT_SECRET_KEY": "x" * 32})
 
     values = build_generated_env(
@@ -95,9 +112,11 @@ def test_build_generated_env_rewrites_local_langwatch_endpoint_for_docker_runtim
 
     assert values["LANGWATCH_ENDPOINT"] == "http://langwatch:5560"
     assert values["LANGWATCH_PUBLIC_URL"] == "https://127.0.0.1:5560"
+    monkeypatch.undo()
 
 
 def test_build_generated_env_uses_fallback_backend_port_when_8000_is_occupied(monkeypatch) -> None:
+    monkeypatch.delenv("DATABASE_AUTO_CREATE_DATABASE", raising=False)
     monkeypatch.delenv("SUMMARIX_BACKEND_PORT", raising=False)
     monkeypatch.setattr(monitoring_stack, "host_port_available", lambda port: port == "18000")
 
@@ -108,6 +127,7 @@ def test_build_generated_env_uses_fallback_backend_port_when_8000_is_occupied(mo
 
 
 def test_build_generated_env_enables_langwatch_for_monitoring_by_default(monkeypatch) -> None:
+    monkeypatch.delenv("DATABASE_AUTO_CREATE_DATABASE", raising=False)
     monkeypatch.delenv("LANGWATCH_ENABLED", raising=False)
 
     persisted = build_persisted_env({}, {}, {})
@@ -117,6 +137,7 @@ def test_build_generated_env_enables_langwatch_for_monitoring_by_default(monkeyp
 
 
 def test_build_generated_env_respects_explicit_langwatch_env_override(monkeypatch) -> None:
+    monkeypatch.delenv("DATABASE_AUTO_CREATE_DATABASE", raising=False)
     monkeypatch.setenv("LANGWATCH_ENABLED", "false")
 
     persisted = build_persisted_env({}, {}, {})
@@ -126,6 +147,8 @@ def test_build_generated_env_respects_explicit_langwatch_env_override(monkeypatc
 
 
 def test_build_generated_env_respects_custom_langwatch_metrics_targets() -> None:
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.delenv("DATABASE_AUTO_CREATE_DATABASE", raising=False)
     persisted = build_persisted_env({}, {}, {"JWT_SECRET_KEY": "x" * 32})
 
     values = build_generated_env(
@@ -140,9 +163,12 @@ def test_build_generated_env_respects_custom_langwatch_metrics_targets() -> None
 
     assert values["LANGWATCH_APP_METRICS_TARGET"] == "custom-langwatch-app:7000"
     assert values["LANGWATCH_WORKERS_METRICS_TARGET"] == "custom-langwatch-workers:7999"
+    monkeypatch.undo()
 
 
 def test_build_generated_env_allows_overriding_langwatch_tls_certificate_paths() -> None:
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.delenv("DATABASE_AUTO_CREATE_DATABASE", raising=False)
     persisted = build_persisted_env({}, {}, {"JWT_SECRET_KEY": "x" * 32})
 
     values = build_generated_env(
@@ -157,6 +183,7 @@ def test_build_generated_env_allows_overriding_langwatch_tls_certificate_paths()
 
     assert values["LANGWATCH_TLS_CERT_FILE"] == "/etc/ssl/certs/langwatch.crt"
     assert values["LANGWATCH_TLS_KEY_FILE"] == "/etc/ssl/private/langwatch.key"
+    monkeypatch.undo()
 
 
 def test_normalize_public_url_for_https_rewrites_plain_http() -> None:
@@ -182,14 +209,18 @@ def test_build_persisted_env_reuses_existing_strong_secrets() -> None:
 
 
 def test_build_generated_env_without_api_key_falls_back_to_mock() -> None:
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.delenv("DATABASE_AUTO_CREATE_DATABASE", raising=False)
     persisted = build_persisted_env({}, {}, {})
 
     values = build_generated_env({}, {}, persisted, {})
 
     assert values["CHAT_AGENT_MODE"] == "mock"
+    monkeypatch.undo()
 
 
 def test_build_generated_env_uses_named_volume_for_clickhouse_on_windows(monkeypatch) -> None:
+    monkeypatch.delenv("DATABASE_AUTO_CREATE_DATABASE", raising=False)
     monkeypatch.setattr("scripts.monitoring_stack.platform.system", lambda: "Windows")
 
     persisted = build_persisted_env({}, {}, {})
@@ -199,6 +230,7 @@ def test_build_generated_env_uses_named_volume_for_clickhouse_on_windows(monkeyp
 
 
 def test_build_generated_env_keeps_bind_mount_for_clickhouse_on_linux(monkeypatch) -> None:
+    monkeypatch.delenv("DATABASE_AUTO_CREATE_DATABASE", raising=False)
     monkeypatch.setattr("scripts.monitoring_stack.platform.system", lambda: "Linux")
 
     persisted = build_persisted_env({}, {}, {})

@@ -23,3 +23,6 @@ extension/dist/
 
 # IDE and editor settings
 .idea/
+
+#pdf文档
+技术报告.pdf

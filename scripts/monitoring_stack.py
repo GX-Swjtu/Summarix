@@ -824,7 +824,7 @@ def build_generated_env(
         "LANGWATCH_PORT": langwatch_port,
         "DATABASE_URL": f"postgresql+asyncpg://{postgres_user}:{postgres_password}@postgres:5432/{postgres_db}",
         "ADK_DATABASE_URL": f"postgresql+asyncpg://{postgres_user}:{postgres_password}@postgres:5432/{postgres_db}",
-        "DATABASE_AUTO_CREATE_DATABASE": "false",
+        "DATABASE_AUTO_CREATE_DATABASE": env_value("DATABASE_AUTO_CREATE_DATABASE", combined_values, "true") or "true",
         "DATABASE_AUTO_CREATE_TABLES": env_value("DATABASE_AUTO_CREATE_TABLES", combined_values, "true") or "true",
         "PROMETHEUS_ENABLED": "true",
         "PROMETHEUS_METRICS_PATH": env_value("PROMETHEUS_METRICS_PATH", combined_values, "/metrics") or "/metrics",

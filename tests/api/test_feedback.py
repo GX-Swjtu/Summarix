@@ -1,12 +1,14 @@
 import json
 
+import httpx
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 
+from app.core.config import Settings
 from app.db.models import MessageFeedback
 from app.db.session import AsyncSessionLocal
-from app.monitoring.feedback import LangWatchAnnotationResult
+from app.monitoring.feedback import LangWatchAnnotationResult, create_langwatch_annotation
 
 
 def parse_sse_events(body: str) -> list[dict[str, str]]:
@@ -123,3 +125,49 @@ async def test_feedback_uses_langwatch_annotation_result(authenticated_client: A
     assert captured["trace_id"] == trace_id
     assert captured["is_thumbs_up"] is True
     assert captured["comment"] == "很好"
+
+
+@pytest.mark.asyncio
+async def test_langwatch_annotation_uses_required_comment_and_auth_headers(monkeypatch: pytest.MonkeyPatch):
+    captured: dict[str, object] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["headers"] = request.headers
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"data": {"id": "annotation-1"}})
+
+    transport = httpx.MockTransport(handler)
+    original_async_client = httpx.AsyncClient
+
+    def async_client_with_transport(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original_async_client(*args, **kwargs)
+
+    monkeypatch.setattr("app.monitoring.feedback.httpx.AsyncClient", async_client_with_transport)
+    settings = Settings(
+        langwatch_enabled=True,
+        langwatch_api_key="sk-lw-test-key",
+        langwatch_endpoint="http://langwatch:5560",
+    )
+
+    result = await create_langwatch_annotation(
+        settings,
+        trace_id="trace/with space",
+        is_thumbs_up=False,
+        comment=None,
+        email="tester@example.com",
+    )
+
+    assert result.status == "synced"
+    assert result.annotation_id == "annotation-1"
+    assert captured["url"] == "http://langwatch:5560/api/annotations/trace/trace%2Fwith%20space"
+    assert captured["body"] == {
+        "comment": "用户点踩",
+        "isThumbsUp": False,
+        "email": "tester@example.com",
+    }
+    headers = captured["headers"]
+    assert isinstance(headers, httpx.Headers)
+    assert headers["Authorization"] == "Bearer sk-lw-test-key"
+    assert headers["X-Auth-Token"] == "sk-lw-test-key"
