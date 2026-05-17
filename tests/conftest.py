@@ -10,6 +10,26 @@ os.environ["DATABASE_AUTO_CREATE_TABLES"] = "false"
 os.environ["JWT_SECRET_KEY"] = "test-secret-with-at-least-thirty-two-bytes"
 os.environ["CHAT_AGENT_MODE"] = "mock"
 os.environ["CHAT_ARTIFACT_ROOT"] = ".data/test-artifacts"
+os.environ["DEFAULT_CHAT_MODEL"] = "dashscope/qwen3.5-flash"
+os.environ["LOG_FORMAT"] = "text"
+os.environ["LOG_LEVEL"] = "INFO"
+for model_env_name in (
+    "MODEL_CATALOG_FILE",
+    "MODEL_CATALOG_JSON",
+    "DEFAULT_PRIMARY_MODEL_ID",
+    "SUGGESTED_QUESTIONS_MODEL_ID",
+    "TEXT_SUMMARY_MODEL",
+    "CONVERSATION_MODEL",
+    "XIAOHONGSHU_MODEL",
+    "SHORT_VIDEO_SCRIPT_MODEL",
+    "SUGGESTED_QUESTIONS_MODEL",
+):
+    os.environ[model_env_name] = ""
+os.environ["TEXT_SUMMARY_THINKING_MODE"] = "default"
+os.environ["CONVERSATION_THINKING_MODE"] = "default"
+os.environ["XIAOHONGSHU_THINKING_MODE"] = "default"
+os.environ["SHORT_VIDEO_SCRIPT_THINKING_MODE"] = "default"
+os.environ["SUGGESTED_QUESTIONS_THINKING_MODE"] = "disabled"
 
 import pytest
 import pytest_asyncio
@@ -17,7 +37,7 @@ from httpx import ASGITransport, AsyncClient
 
 from app.api.app import create_app
 from app.core.config import get_settings
-from app.db.init import create_all_tables, drop_all_tables
+from app.db.init import drop_all_tables, upgrade_database
 from app.db.session import engine
 
 
@@ -33,7 +53,7 @@ def reset_langwatch_initialized():
 @pytest_asyncio.fixture(autouse=True)
 async def reset_database():
     await drop_all_tables(engine)
-    await create_all_tables(engine)
+    await upgrade_database(engine)
     yield
 
 

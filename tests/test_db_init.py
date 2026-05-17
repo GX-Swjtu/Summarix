@@ -61,9 +61,11 @@ class FakeAdminEngine:
 class FakeBeginConnection:
     def __init__(self):
         self.called_with = None
+        self.run_sync_args = None
 
-    async def run_sync(self, function):
+    async def run_sync(self, function, *args):
         self.called_with = function
+        self.run_sync_args = args
 
 
 class FakeBeginContext:
@@ -131,15 +133,15 @@ async def test_ensure_database_exists_creates_missing_postgres_database(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_create_all_tables_ensures_database_before_creating_metadata(monkeypatch: pytest.MonkeyPatch):
+async def test_upgrade_database_ensures_database_before_running_migration(monkeypatch: pytest.MonkeyPatch):
     calls: list[tuple[str, object]] = []
-    metadata_connection = FakeBeginConnection()
+    migration_connection = FakeBeginConnection()
 
     async def fake_ensure_database_exists(database_url: str):
         calls.append(("db", database_url))
 
     monkeypatch.setattr(db_init, "ensure_database_exists", fake_ensure_database_exists)
-    monkeypatch.setattr(db_init, "engine", FakeMetadataEngine(metadata_connection))
+    monkeypatch.setattr(db_init, "engine", FakeMetadataEngine(migration_connection))
 
     settings = Settings(
         jwt_secret_key="x" * 32,
@@ -147,10 +149,11 @@ async def test_create_all_tables_ensures_database_before_creating_metadata(monke
         database_auto_create_database=True,
     )
 
-    await db_init.create_all_tables(settings=settings)
+    await db_init.upgrade_database(settings=settings)
 
     assert calls == [("db", settings.database_url)]
-    assert metadata_connection.called_with is not None
+    assert migration_connection.called_with is db_init._run_alembic_upgrade
+    assert migration_connection.run_sync_args == (settings, "head")
 
 
 @pytest.mark.asyncio
@@ -208,21 +211,21 @@ async def test_ensure_admin_user_upserts_expected_credentials():
 
 
 @pytest.mark.asyncio
-async def test_rebuild_database_with_admin_calls_reset_create_and_seed(monkeypatch: pytest.MonkeyPatch):
+async def test_rebuild_database_with_admin_calls_reset_migrate_and_seed(monkeypatch: pytest.MonkeyPatch):
     calls: list[tuple[str, str | None, str | None]] = []
 
     async def fake_reset_database(db_engine=None, settings=None):
         calls.append(("reset", None, None))
 
-    async def fake_create_all_tables(db_engine=None, settings=None):
-        calls.append(("create", None, None))
+    async def fake_upgrade_database(db_engine=None, settings=None):
+        calls.append(("upgrade", None, None))
 
     async def fake_ensure_admin_user(admin_email: str, admin_password: str, session_factory=None):
         calls.append(("admin", admin_email, admin_password))
         return User(email=admin_email, password_hash="hashed")
 
     monkeypatch.setattr(db_init, "reset_database", fake_reset_database)
-    monkeypatch.setattr(db_init, "create_all_tables", fake_create_all_tables)
+    monkeypatch.setattr(db_init, "upgrade_database", fake_upgrade_database)
     monkeypatch.setattr(db_init, "ensure_admin_user", fake_ensure_admin_user)
 
     user = await db_init.rebuild_database_with_admin(
@@ -233,6 +236,6 @@ async def test_rebuild_database_with_admin_calls_reset_create_and_seed(monkeypat
     assert user.email == "admin@admin.com"
     assert calls == [
         ("reset", None, None),
-        ("create", None, None),
+        ("upgrade", None, None),
         ("admin", "admin@admin.com", "adminGaoxin"),
     ]

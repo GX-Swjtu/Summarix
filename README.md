@@ -34,7 +34,9 @@ Copy-Item .env.example .env
 
 `DATABASE_AUTO_CREATE_DATABASE=true` 时，如果 PostgreSQL 服务已存在但目标数据库还没创建，后端会尝试自动建库；这要求当前数据库账号具备建库权限。
 
-`DATABASE_AUTO_CREATE_TABLES=true` 时，后端会在已连接的数据库中创建缺失表；它不会启动数据库服务。
+`DATABASE_AUTO_CREATE_TABLES=true` 时，后端启动后会对已连接的数据库执行 Alembic 升级到最新版本；它不会启动数据库服务。生产多实例部署建议先用 `make db-upgrade` 或 CI/CD 单独完成升级，再启动或扩容服务。
+
+数据库结构变更统一由 Alembic 管理。常用命令包括：`make db-upgrade` 执行增量升级，`make db-revision MSG="添加字段"` 生成迁移文件，`make db-current` 查看当前版本，`make db-reset` 删除并重建开发库且初始化管理员账号。完整流程见 [文档/数据库升级指南.md](文档/数据库升级指南.md)。
 
 2. 安装依赖并启动后端。
 
@@ -59,7 +61,7 @@ LiteLLM 模型请直接使用 `provider/model` 形式，例如 `dashscope/qwen3.
 
 兼容旧方式时，仍可通过 `MODEL_CATALOG_JSON` 内联 JSON，或继续使用 `TEXT_SUMMARY_MODEL`、`CONVERSATION_MODEL`、`XIAOHONGSHU_MODEL`、`SHORT_VIDEO_SCRIPT_MODEL`、`SUGGESTED_QUESTIONS_MODEL` 等旧环境变量作为兜底；但前端用户选择入口已经统一为“一个主力模型”。
 
-如果已有开发库是在这些模型偏好列加入前创建的，需要重建本地开发库或手动补齐 `user_model_preferences` 新列；项目当前没有迁移脚本，`DATABASE_AUTO_CREATE_TABLES=true` 只会创建缺失表，不会修改已存在表结构。
+如果已有开发库是在这些模型偏好列加入前创建的，执行 `make db-upgrade` 即可按 Alembic 迁移补齐结构；若不需要保留本地数据，也可以执行 `make db-reset` 重建开发库。
 
 截图和图片不再配置单独的视觉分析模型，会随当前任务交给对应模型处理；聊天界面会在发送图片时提醒用户确认模型支持图像输入。
 
@@ -336,7 +338,7 @@ API_TOKEN_JWT_SECRET=
 
 用户反馈接口为 `POST /api/feedback`，插件会在助手回复旁显示点赞/点踩按钮。后端会先保存本地反馈记录；如果 LangWatch 启用且有 `trace_id`，会再调用 LangWatch Annotation API，把反馈关联到对应 trace。LangWatch 同步失败不会丢失本地反馈。
 
-本项目当前没有迁移脚本。此次监控反馈集成新增了 `messages.trace_id`、`message_artifacts.trace_id` 和 `message_feedback` 表；开发期可以按既有说明重建数据库，生产环境需要补充迁移或手动 DDL。
+监控反馈相关表和字段已经纳入 Alembic 迁移。升级已有环境时先执行 [文档/数据库升级指南.md](文档/数据库升级指南.md) 中的 `make db-upgrade`，再启动或扩容后端服务。
 
 ## 设计说明
 

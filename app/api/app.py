@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routers import auth, chat, feedback, history, settings as settings_router
 from app.core.config import Settings, get_settings
-from app.db.init import create_all_tables
+from app.db.init import upgrade_database
 from app.monitoring.langwatch import setup_langwatch
 from app.monitoring.logging import configure_logging
 from app.monitoring.metrics import configure_fastapi_metrics
@@ -16,7 +16,7 @@ from app.monitoring.metrics import configure_fastapi_metrics
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     if settings.database_auto_create_tables:
-        await create_all_tables()
+        await upgrade_database(settings=settings)
     yield
 
 

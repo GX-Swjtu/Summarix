@@ -23,6 +23,10 @@ RUN if [ -n "$UV_INDEX_URL" ]; then \
     fi
 
 COPY app ./app
+COPY alembic ./alembic
+COPY alembic.ini ./alembic.ini
+COPY config ./config
+COPY iconResources ./iconResources
 COPY main.py ./main.py
 
 EXPOSE 8000

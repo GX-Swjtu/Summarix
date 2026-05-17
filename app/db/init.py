@@ -3,9 +3,11 @@ import asyncio
 from pathlib import Path
 from urllib.parse import unquote
 
+from alembic import command
+from alembic.config import Config
 from sqlalchemy import select, text
 from sqlalchemy.dialects import postgresql
-from sqlalchemy.engine import URL, make_url
+from sqlalchemy.engine import Connection, URL, make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from app.auth.passwords import hash_password
@@ -20,6 +22,9 @@ _ensured_database_urls: set[str] = set()
 _database_creation_locks: dict[str, asyncio.Lock] = {}
 DEFAULT_ADMIN_EMAIL = "admin@admin.com"
 DEFAULT_ADMIN_PASSWORD = "adminGaoxin"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+ALEMBIC_INI_PATH = PROJECT_ROOT / "alembic.ini"
+ALEMBIC_SCRIPT_LOCATION = PROJECT_ROOT / "alembic"
 
 
 def _iter_maintenance_urls(target_url: URL) -> list[URL]:
@@ -131,18 +136,58 @@ async def reset_database(db_engine: AsyncEngine | None = None, settings: Setting
 
 
 async def create_all_tables(db_engine: AsyncEngine | None = None, settings: Settings | None = None) -> None:
+    await upgrade_database(db_engine=db_engine, settings=settings)
+
+
+def build_alembic_config(settings: Settings | None = None, connection: Connection | None = None) -> Config:
+    settings = settings or get_settings()
+    alembic_config = Config(str(ALEMBIC_INI_PATH))
+    alembic_config.set_main_option("script_location", str(ALEMBIC_SCRIPT_LOCATION))
+    alembic_config.set_main_option("sqlalchemy.url", settings.database_url)
+    if connection is not None:
+        alembic_config.attributes["connection"] = connection
+    return alembic_config
+
+
+def _run_alembic_upgrade(connection: Connection, settings: Settings, revision: str) -> None:
+    command.upgrade(build_alembic_config(settings=settings, connection=connection), revision)
+
+
+def _run_alembic_downgrade(connection: Connection, settings: Settings, revision: str) -> None:
+    command.downgrade(build_alembic_config(settings=settings, connection=connection), revision)
+
+
+async def upgrade_database(
+    db_engine: AsyncEngine | None = None,
+    settings: Settings | None = None,
+    revision: str = "head",
+) -> None:
     settings = settings or get_settings()
     if db_engine is None and settings.database_auto_create_database:
         await ensure_database_exists(settings.database_url)
     target_engine = db_engine or engine
     async with target_engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
+        await connection.run_sync(_run_alembic_upgrade, settings, revision)
+
+
+async def downgrade_database(
+    db_engine: AsyncEngine | None = None,
+    settings: Settings | None = None,
+    revision: str = "-1",
+) -> None:
+    settings = settings or get_settings()
+    if db_engine is None and settings.database_auto_create_database:
+        await ensure_database_exists(settings.database_url)
+    target_engine = db_engine or engine
+    async with target_engine.begin() as connection:
+        await connection.run_sync(_run_alembic_downgrade, settings, revision)
 
 
 async def drop_all_tables(db_engine: AsyncEngine | None = None) -> None:
     target_engine = db_engine or engine
     async with target_engine.begin() as connection:
         await connection.run_sync(Base.metadata.drop_all)
+        await connection.execute(text("DROP TABLE IF EXISTS alembic_version"))
 
 
 async def ensure_admin_user(
@@ -176,7 +221,7 @@ async def rebuild_database_with_admin(
 ) -> User:
     settings = settings or get_settings()
     await reset_database(db_engine=db_engine, settings=settings)
-    await create_all_tables(db_engine=db_engine, settings=settings)
+    await upgrade_database(db_engine=db_engine, settings=settings)
     return await ensure_admin_user(
         admin_email=admin_email,
         admin_password=admin_password,

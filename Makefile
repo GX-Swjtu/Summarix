@@ -15,7 +15,7 @@ EXTENSION_DIR := extension
 # 监控辅助脚本
 MONITORING_TOOL := scripts/monitoring_stack.py
 
-.PHONY: help sync install run backend db-reset test test-api test-file extension-install extension-build extension-dev build push verify monitor-up monitor-down monitor-check monitor-backend-up monitor-backend-down monitor-backend-check monitor-plg-up monitor-plg-down monitor-plg-check monitor-langwatch-up monitor-langwatch-down monitor-langwatch-check monitor-test-api
+.PHONY: help sync install run backend db-reset db-upgrade db-downgrade db-revision db-current db-history test test-api test-file extension-install extension-build extension-dev build push verify monitor-up monitor-down monitor-check monitor-backend-up monitor-backend-down monitor-backend-check monitor-plg-up monitor-plg-down monitor-plg-check monitor-langwatch-up monitor-langwatch-down monitor-langwatch-check monitor-test-api
 
 # 默认目标，展示可用命令
 .DEFAULT_GOAL := help
@@ -28,6 +28,11 @@ help:
 	@echo "  make run              - 直接运行后端服务"
 	@echo "  make backend          - 直接运行后端服务"
 	@echo "  make db-reset         - 删除并重建数据库，同时初始化管理员账号"
+	@echo "  make db-upgrade       - 执行 Alembic 数据库升级，默认升级到 head，可用 DB_TARGET=版本 指定目标"
+	@echo "  make db-downgrade     - 回滚 Alembic 数据库版本，默认回滚一步，可用 DB_TARGET=base 或版本 指定目标"
+	@echo "  make db-revision MSG=添加字段 - 基于当前模型生成新的 Alembic 迁移文件"
+	@echo "  make db-current       - 查看当前数据库迁移版本"
+	@echo "  make db-history       - 查看数据库迁移历史"
 	@echo "  make test             - 运行全部 Python 测试"
 	@echo "  make test-api         - 运行 API 测试"
 	@echo "  make test-file TEST=tests/api/test_auth.py - 运行指定测试文件或目录"
@@ -72,6 +77,32 @@ run: backend
 db-reset:
 	@echo "删除并重建数据库，初始化管理员账号"
 	$(UV_RUN) python -m app.db.init reset --admin-email "$(or $(ADMIN_EMAIL),admin@admin.com)" --admin-password "$(or $(ADMIN_PASSWORD),adminGaoxin)"
+
+# 执行 Alembic 数据库升级
+db-upgrade:
+	@echo "执行数据库升级: $(or $(DB_TARGET),head)"
+	$(UV_RUN) alembic upgrade "$(or $(DB_TARGET),head)"
+
+# 回滚 Alembic 数据库版本
+db-downgrade:
+	@echo "回滚数据库版本: $(or $(DB_TARGET),-1)"
+	$(UV_RUN) alembic downgrade "$(or $(DB_TARGET),-1)"
+
+# 基于当前 SQLAlchemy 模型生成迁移文件
+db-revision:
+	$(if $(strip $(MSG)),,$(error 请使用 make db-revision MSG="描述迁移内容"))
+	@echo "生成数据库迁移: $(MSG)"
+	$(UV_RUN) alembic revision --autogenerate -m "$(MSG)"
+
+# 查看当前数据库迁移版本
+db-current:
+	@echo "查看当前数据库迁移版本"
+	$(UV_RUN) alembic current
+
+# 查看数据库迁移历史
+db-history:
+	@echo "查看数据库迁移历史"
+	$(UV_RUN) alembic history --verbose
 
 # 运行全部 Python 测试
 test:
